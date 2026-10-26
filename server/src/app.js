@@ -29,7 +29,7 @@ const app = express();
 app.use(helmet());
 
 // Allow requests from the deployed CRM frontend domains
-const allowedOrigins = [
+export const allowedOrigins = [
   'https://crm.eco-friendly.tech',
   'https://crm-front-5hmj.onrender.com',
   ...(process.env.CLIENT_URL || '')
