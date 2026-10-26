@@ -1,0 +1,23 @@
+node_modules
+dist
+.env
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Generated builds
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local files
+.DS_Store
+Thumbs.db

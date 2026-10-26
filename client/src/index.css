@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+@layer components {
+  .input { @apply w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:bg-gray-100 disabled:text-gray-500; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-semibold transition-all disabled:opacity-50 whitespace-nowrap active:scale-[0.98]; }
+  .btn-primary { @apply text-white shadow-sm; background-color: #FD7B69; }
+  .btn-primary:hover { background-color: #FB725D; }
+  .btn-primary:active { background-color: #E66354; }
+  .btn-ghost { @apply border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 hover:border-gray-400; }
+  .btn-danger { @apply bg-red-600 text-white hover:bg-red-700; }
+  .btn-teal { @apply text-white shadow-sm; background-color: #23AAA7; }
+  .btn-teal:hover { background-color: #1DA4AC; }
+  .card { @apply rounded-xl border border-gray-200 bg-white shadow-sm; }
+  .label { @apply mb-1 block text-xs font-medium text-gray-600; }
+  .th { @apply px-3 sm:px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 whitespace-nowrap; }
+  .td { @apply px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm align-middle; }
+  .icon-btn { @apply inline-flex items-center justify-center rounded-lg p-1.5 sm:p-2 text-gray-500 transition-colors active:scale-95; }
+  .icon-btn:hover { background-color: #EDFAFA; color: #23AAA7; }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "eco-crm",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
+    "dev": "node run-dev.cjs",
+    "seed": "npm run seed --prefix server",
+    "seed:demo": "npm run seed:demo --prefix server"
+  },
+  "devDependencies": { "concurrently": "^8.2.2" }
+}
