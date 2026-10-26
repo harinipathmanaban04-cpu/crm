@@ -12,6 +12,7 @@ dotenv.config();
 import http from 'http';
 import mongoose from 'mongoose';
 import app from './app.js';
+app.set('trust proxy', 1);
 import bcrypt from 'bcryptjs';
 import { initSocket } from './realtime.js';
 import { User } from './models.js';
