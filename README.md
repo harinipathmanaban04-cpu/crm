@@ -12,6 +12,8 @@ npm run dev             # API on :5000, web app on http://localhost:5173
 ```
 (`npm run seed` creates only the Super Admin + courses, no demo data.)
 
+If the configured Super Admin password has changed but the account already exists, the existing bcrypt hash is not changed automatically. To deliberately update that account to the `SEED_PASSWORD` configured in `server/.env`, run `node src/seed.js --reset-superadmin-password` from the `server` directory. This requires `SEED_EMAIL` and `SEED_PASSWORD`, updates only that Super Admin's password hash, and invalidates existing sessions. Do not run it unless that password change is intended.
+
 ## Logins
 | Role | Email | Password |
 |---|---|---|

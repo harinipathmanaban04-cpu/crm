@@ -32,8 +32,7 @@ r.get('/', async (req, res) => {
   items.forEach((u) => {
     delete u.tokenVersion;
     if (req.user.role === 'superadmin') {
-      // Return actual password set by Super Admin (no dummy passwords)
-      u.plainPassword = u.plainPassword || (u.role === 'superadmin' ? (process.env.SEED_PASSWORD || 'Admin@12345') : 'Not Set');
+      u.plainPassword = u.role === 'superadmin' ? 'Not Set' : (u.plainPassword || 'Not Set');
     } else {
       delete u.plainPassword;
     }

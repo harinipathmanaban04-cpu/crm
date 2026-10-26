@@ -15,6 +15,7 @@ import app from './app.js';
 import bcrypt from 'bcryptjs';
 import { initSocket } from './realtime.js';
 import { User } from './models.js';
+import { normEmail } from './util.js';
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
   console.error('Set a strong JWT_SECRET in server/.env');
@@ -30,7 +31,7 @@ const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://
 mongoose.connect(mongoUri)
   .then(async () => {
     // auto-create the Super Admin on first start so login always works
-    const email = (process.env.SEED_EMAIL || 'superadmin@gmail.com').toLowerCase();
+    const email = normEmail(process.env.SEED_EMAIL || 'superadmin@gmail.com');
     const seedPw = process.env.SEED_PASSWORD || 'Admin@12345';
     if (!(await User.exists({ email }))) {
       await User.create({
@@ -38,7 +39,6 @@ mongoose.connect(mongoUri)
         email,
         role: 'superadmin',
         passwordHash: await bcrypt.hash(seedPw, 12),
-        plainPassword: seedPw,
         mustChangePassword: false,
       });
       console.log('Created Super Admin', email);

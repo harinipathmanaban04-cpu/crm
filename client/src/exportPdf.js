@@ -137,7 +137,7 @@ export function generateAccountsPdfBlob({
       const roleName = row.role === 'superadmin' ? 'Super Admin' : row.role === 'admin' ? 'Admin' : 'Sales Exec';
       const statusText = row.active !== false ? 'Active' : 'Inactive';
       const teamText = row.team?.name || row.teamName || (row.role === 'superadmin' ? 'All' : '—');
-      const passText = row.plainPassword || (row.role === 'superadmin' ? 'Admin@12345' : 'Not Set');
+      const passText = row.plainPassword || 'Not Set';
 
       const vals = {
         idx: String(globalIdx),
