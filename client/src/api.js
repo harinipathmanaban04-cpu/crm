@@ -1,5 +1,6 @@
 import axios from 'axios';
-const api = axios.create({ baseURL: '/api' });
+const apiOrigin = import.meta.env.VITE_API_URL?.replace(/\/+$/, '');
+const api = axios.create({ baseURL: apiOrigin ? `${apiOrigin}/api` : '/api' });
 api.interceptors.request.use((c) => { const t = localStorage.getItem('crm_token'); if (t) c.headers.Authorization = 'Bearer ' + t; return c; });
 api.interceptors.response.use((r) => r, (e) => {
   const s = e.response?.status, code = e.response?.data?.code;

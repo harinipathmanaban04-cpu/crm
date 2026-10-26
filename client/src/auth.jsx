@@ -12,6 +12,9 @@ export function AuthProvider({ children }) {
   useEffect(() => { reload(); }, [reload]);
   const login = async (email, password) => {
     const { data } = await api.post('/auth/login', { email, password });
+    if (!data || typeof data.token !== 'string' || !data.user || typeof data.user !== 'object') {
+      throw new Error('Invalid login response. Please try again or contact support.');
+    }
     localStorage.setItem('crm_token', data.token); setUser(data.user); return data.user;
   };
   const applySession = (data) => { localStorage.setItem('crm_token', data.token); setUser(data.user); };

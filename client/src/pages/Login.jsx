@@ -1,16 +1,15 @@
 import { useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../auth.jsx';
 import { errMsg } from '../api';
 
 export default function Login() {
   const { user, login } = useAuth(); const nav = useNavigate(); const [sp] = useSearchParams();
-  const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); const [show, setShow] = useState(false); const [err, setErr] = useState(sp.get('expired') ? 'Your session expired. Please sign in again.' : ''); const [busy, setBusy] = useState(false);
+  const [email, setEmail] = useState(''); const [pw, setPw] = useState(''); const [err, setErr] = useState(sp.get('expired') ? 'Your session expired. Please sign in again.' : ''); const [busy, setBusy] = useState(false);
   if (user) return <Navigate to={user.mustChangePassword ? '/change-password' : '/'} replace />;
   const submit = async (e) => {
     e.preventDefault(); setBusy(true); setErr('');
-    try { const u = await login(email, pw); nav(u.mustChangePassword ? '/change-password' : '/'); } catch (x) { setErr(errMsg(x)); } finally { setBusy(false); }
+    try { const u = await login(email, pw); nav(u?.mustChangePassword ? '/change-password' : '/'); } catch (x) { setErr(errMsg(x)); } finally { setBusy(false); }
   };
   return (
     <div className="flex min-h-screen items-center justify-center p-4" style={{ background: 'linear-gradient(135deg, #EDFAFA 0%, #ffffff 50%, #FFF3F0 100%)' }}>
@@ -23,8 +22,7 @@ export default function Login() {
           {err && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{err}</div>}
           <div><label className="label">Email</label><input className="input" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" /></div>
           <div><label className="label">Password</label>
-            <div className="relative"><input className="input pr-10" type={show ? 'text' : 'password'} required value={pw} onChange={(e) => setPw(e.target.value)} />
-              <button type="button" className="absolute right-3 top-2.5 text-gray-400 hover:text-brand-500 transition-colors" onClick={() => setShow(!show)}>{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></div>
+            <input className="input" type="password" autoComplete="current-password" required value={pw} onChange={(e) => setPw(e.target.value)} /></div>
           <button className="btn btn-primary w-full py-2.5 text-base" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
         </form>
         <p className="mt-5 text-center text-xs text-gray-400">Access is limited to accounts created by the Super Admin.</p>
