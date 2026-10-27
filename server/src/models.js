@@ -10,14 +10,20 @@ export const TASK_STATUSES = ['To Do', 'In Progress', 'Completed', 'Cancelled'];
 export const ADMISSION_STAGES = ['Enquiry', 'Counselling', 'Registered', 'Enrolled', 'Completed', 'Dropped'];
 export const ADMISSION_STATUSES = ['Pending', 'Confirmed', 'Cancelled'];
 export const CUSTOMER_ADM = ['Not Started', 'In Progress', 'Admitted', 'Dropped'];
-export const INVOICE_STATUSES = ['Pending', 'Partially Paid', 'Paid', 'Failed', 'Refunded'];
-export const PAY_STATUSES = ['Pending', 'Success', 'Failed', 'Refunded'];
-export const METHODS = ['Cash', 'UPI', 'Card', 'Bank Transfer', 'Cheque', 'Online'];
+export const INVOICE_STATUSES = ['Pending', 'Partially Paid', 'Paid', 'Overdue', 'Cancelled', 'Failed', 'Refunded'];
+export const PAY_STATUSES = ['Success', 'Pending', 'Partially Paid', 'Paid', 'Failed', 'Refunded', 'Cancelled'];
+export const METHODS = ['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other', 'Cheque', 'Online'];
+export const PAYMENT_PLANS = ['One-Time Payment', 'Monthly EMI', 'Custom Installments'];
 
 const hide = { toJSON: { transform: (d, r) => { delete r.passwordHash; delete r.tokenVersion; delete r.__v; return r; } } };
 
 const Counter = model('Counter', new Schema({ _id: String, seq: { type: Number, default: 0 } }));
 export const nextSeq = async (k) => (await Counter.findByIdAndUpdate(k, { $inc: { seq: 1 } }, { new: true, upsert: true })).seq;
+export const nextInvoiceNo = async () => {
+  const year = new Date().getFullYear();
+  const seq = await nextSeq(`inv_${year}`);
+  return `EFTS-INV-${year}-${String(seq).padStart(3, '0')}`;
+};
 
 export const User = model('User', new Schema({
   name: { type: String, required: true, trim: true, maxlength: 100 },
@@ -109,6 +115,7 @@ export const Customer = model('Customer', customerSchema);
 export const Admission = model('Admission', new Schema({
   customer: ref('Customer', { required: true, index: true }),
   course: ref('Course', { required: true }),
+  mode: { type: String, enum: ['Online', 'Offline'], default: 'Online' },
   stage: { type: String, enum: ADMISSION_STAGES, default: 'Enquiry' },
   status: { type: String, enum: ADMISSION_STATUSES, default: 'Pending' },
   admissionDate: Date,
@@ -117,31 +124,72 @@ export const Admission = model('Admission', new Schema({
   team: ref('Team', { index: true }),
 }, T));
 
-export const Invoice = model('Invoice', new Schema({
+const invoiceSchema = new Schema({
   invoiceNo: { type: String, unique: true },
-  customer: ref('Customer', { required: true, index: true }),
+  invoiceDate: { type: Date, default: Date.now },
+  customer: ref('Customer', { required: false, index: true }),
+  customerName: { type: String, trim: true },
+  customerEmail: { type: String, trim: true },
+  customerPhone: { type: String, trim: true },
   course: ref('Course'),
+  programName: { type: String, trim: true },
   admission: ref('Admission'),
-  total: { type: Number, required: true, min: 1 },
+  mode: { type: String, enum: ['Online', 'Offline'], default: 'Online' },
+  invoiceType: { type: String, enum: ['Registration', 'Payment', 'Manual'], default: 'Payment' },
+  description: { type: String, trim: true },
+  paymentMode: { type: String, default: 'UPI' },
+  paymentPlan: { type: String, enum: ['One-Time Payment', 'Monthly EMI', 'Custom Installments'], default: 'One-Time Payment' },
+  totalInstallments: { type: Number, default: 1, min: 1 },
+  currentInstallment: { type: Number, default: 1 },
+  installmentAmount: { type: Number, default: 0 },
+  registrationFee: { type: Number, default: 0, min: 0 },
+  totalInternshipFee: { type: Number, default: 0, min: 0 },
+  total: { type: Number, required: true, min: 0 },
   paid: { type: Number, default: 0, min: 0 },
+  balance: { type: Number, default: 0 },
+  amountInWords: { type: String, trim: true },
   status: { type: String, enum: INVOICE_STATUSES, default: 'Pending' },
   dueDate: Date,
   paymentDate: Date,
   method: String,
   txnRef: String,
+  notes: { type: String, maxlength: 2000 },
+  paymentRows: [
+    {
+      sNo: Number,
+      description: String,
+      date: { type: Date, default: Date.now },
+      emiNumber: String,
+      mode: String,
+      amount: Number,
+      status: { type: String, default: 'Success' },
+      txnRef: String,
+      paymentId: ref('Payment'),
+    }
+  ],
+  emailStatus: { type: String, enum: ['Not Sent', 'Sent', 'Failed'], default: 'Not Sent' },
+  emailSentAt: Date,
+  emailRecipient: String,
+  emailMessageId: String,
+  emailError: String,
+  emailedBy: ref('User'),
   owner: ref('User', { index: true }),
   team: ref('Team', { index: true }),
   createdBy: ref('User'),
-}, T));
+}, T);
+export const Invoice = model('Invoice', invoiceSchema);
 
 export const Payment = model('Payment', new Schema({
   invoice: ref('Invoice', { required: true, index: true }),
   customer: ref('Customer'),
+  description: { type: String, trim: true },
   amount: { type: Number, required: true, min: 1 },
-  method: { type: String, enum: METHODS, default: 'Cash' },
+  method: { type: String, enum: METHODS, default: 'UPI' },
+  emiNumber: { type: String, trim: true },
   txnRef: { type: String, trim: true },
   paymentDate: { type: Date, default: Date.now },
-  status: { type: String, enum: PAY_STATUSES, default: 'Pending' },
+  dueDate: Date,
+  status: { type: String, enum: PAY_STATUSES, default: 'Success' },
   owner: ref('User', { index: true }),
   team: ref('Team', { index: true }),
   recordedBy: ref('User'),
@@ -154,3 +202,14 @@ const logSchema = new Schema({
 }, T);
 logSchema.index({ createdAt: -1 });
 export const ActivityLog = model('ActivityLog', logSchema);
+
+const notifSchema = new Schema({
+  recipient: ref('User', { required: true, index: true }),
+  type: { type: String, required: true },
+  title: { type: String, required: true },
+  message: { type: String, required: true },
+  data: { type: Schema.Types.Mixed, default: {} },
+  read: { type: Boolean, default: false, index: true },
+}, T);
+notifSchema.index({ recipient: 1, read: 1 });
+export const Notification = model('Notification', notifSchema);

@@ -12,5 +12,8 @@ export const auth = (allowTemp = false) => async (req, res, next) => {
     next();
   } catch { res.status(401).json({ message: 'Session expired' }); }
 };
-export const requireRole = (...roles) => (req, res, next) =>
-  roles.includes(req.user.role) ? next() : res.status(403).json({ message: 'You do not have permission to do this' });
+export const requireRole = (...roles) => (req, res, next) => {
+  if (req.user && roles.includes(req.user.role)) return next();
+  console.warn(`[requireRole] Access denied for user ${req.user?._id} (${req.user?.email}, role: ${req.user?.role}). Required roles: [${roles.join(', ')}] on ${req.method} ${req.originalUrl}`);
+  return res.status(403).json({ message: 'You do not have permission to do this' });
+};

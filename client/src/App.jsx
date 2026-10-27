@@ -8,6 +8,7 @@ import Teams from './pages/Teams.jsx';
 import Reports from './pages/Reports.jsx';
 import Profile from './pages/Profile.jsx';
 import { Accounts, LeadsPage, TasksPage, CustomersPage, AdmissionsPage, InvoicesPage, ActivityPage } from './pages/modules.jsx';
+import InvoiceDetail from './pages/InvoiceDetail.jsx';
 import { Spinner } from './ui.jsx';
 
 function Protected({ children, allowTemp, roles }) {
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="customers" element={<CustomersPage />} />
         <Route path="admissions" element={<AdmissionsPage />} />
         <Route path="invoices" element={<InvoicesPage />} />
+<Route path="invoices/:id" element={<InvoiceDetail />} />
         <Route path="reports" element={<Reports />} />
         <Route path="activity" element={<Protected roles={['superadmin', 'admin']}><ActivityPage /></Protected>} />
         <Route path="profile" element={<Profile />} />

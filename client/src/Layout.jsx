@@ -1,16 +1,153 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, UsersRound, Target, ListChecks, Contact, GraduationCap, Receipt, BarChart3, History, UserCircle, PhoneCall, Menu, Search, LogOut, ChevronsLeft, ChevronsRight, Wifi, WifiOff, X } from 'lucide-react';
+import { LayoutDashboard, Users, UsersRound, Target, ListChecks, Contact, GraduationCap, Receipt, BarChart3, History, UserCircle, PhoneCall, Menu, Search, LogOut, ChevronsLeft, ChevronsRight, Wifi, WifiOff, X, Bell } from 'lucide-react';
 import { useAuth } from './auth.jsx';
 import { useSocket } from './socket.jsx';
 import { LookupProvider } from './lookups.jsx';
 import { roleLabel, CardSelectionProvider } from './ui.jsx';
 import api from './api';
 
+function NotificationBell() {
+  const { user } = useAuth();
+  const nav = useNavigate();
+  const { socket } = useSocket();
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [unread, setUnread] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const ref = useRef(null);
+
+  // Super Admin assigns leads and does not receive lead notifications
+  if (!user || user.role === 'superadmin') return null;
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/notifications');
+      setItems(res.data.items || []);
+      setUnread(res.data.unread || 0);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initial load + poll every 60s
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Listen for realtime notification events
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (data) => {
+      setUnread((n) => n + (data?.unread || 1));
+    };
+    socket.on('notification:new', handler);
+    return () => socket.off('notification:new', handler);
+  }, [socket]);
+
+  // Close on outside click
+  useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    document.addEventListener('touchstart', h);
+    return () => { document.removeEventListener('mousedown', h); document.removeEventListener('touchstart', h); };
+  }, []);
+
+  const handleOpen = () => {
+    setOpen((o) => !o);
+    if (!open) load();
+  };
+
+  const markRead = async (id) => {
+    await api.post(`/notifications/${id}/read`).catch(() => {});
+    setItems((prev) => prev.map((n) => n._id === id ? { ...n, read: true } : n));
+    setUnread((n) => Math.max(0, n - 1));
+  };
+
+  const markAllRead = async () => {
+    await api.post('/notifications/read-all').catch(() => {});
+    setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+    setUnread(0);
+  };
+
+  const fmtTime = (d) => {
+    const dt = new Date(d);
+    const now = new Date();
+    const diff = now - dt;
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return dt.toLocaleDateString();
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        className="relative flex items-center justify-center h-9 w-9 rounded-lg hover:bg-gray-100 transition text-gray-500"
+        onClick={handleOpen}
+        aria-label="Notifications"
+        title="Notifications"
+      >
+        <Bell className="h-5 w-5" />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+            {unread > 9 ? '9+' : unread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-11 z-40 w-80 rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2.5 border-b border-gray-100 bg-gray-50">
+            <span className="text-sm font-semibold text-gray-800">Notifications</span>
+            {unread > 0 && (
+              <button className="text-xs text-brand-600 hover:underline" onClick={markAllRead}>
+                Mark all read
+              </button>
+            )}
+          </div>
+          <div className="max-h-80 overflow-y-auto">
+            {loading && items.length === 0 ? (
+              <p className="p-4 text-center text-xs text-gray-400">Loading…</p>
+            ) : items.length === 0 ? (
+              <p className="p-6 text-center text-xs text-gray-400">No notifications yet</p>
+            ) : (
+              items.map((n) => (
+                <button
+                  key={n._id}
+                  className={`block w-full text-left px-3 py-2.5 border-b border-gray-50 hover:bg-gray-50 transition-colors ${!n.read ? 'bg-blue-50/50' : ''}`}
+                  onClick={() => {
+                    if (!n.read) markRead(n._id);
+                    setOpen(false);
+                    nav('/leads');
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    {!n.read && <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-500" />}
+                    {n.read && <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0" />}
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-xs font-medium truncate ${n.read ? 'text-gray-600' : 'text-gray-900'}`}>{n.title}</p>
+                      <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</p>
+                      <p className="text-[10px] text-gray-400 mt-1">{fmtTime(n.createdAt)}</p>
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const NAV = {
   superadmin: [['/', 'Dashboard', LayoutDashboard], ['/accounts', 'Accounts', Users], ['/teams', 'Teams', UsersRound], ['/leads', 'Leads', Target], ['/tasks', 'Tasks', ListChecks], ['/customers', 'All Customers', Contact], ['/admissions', 'Courses & Admissions', GraduationCap], ['/invoices', 'Invoices & Payments', Receipt], ['/reports', 'Reports', BarChart3], ['/activity', 'Activity History', History], ['/profile', 'My Profile', UserCircle]],
   admin: [['/', 'Dashboard', LayoutDashboard], ['/leads', 'Leads', Target], ['/teams', 'My Team', UsersRound], ['/tasks', 'Tasks', ListChecks], ['/customers', 'Customers', Contact], ['/admissions', 'Courses & Admissions', GraduationCap], ['/invoices', 'Invoices & Payments', Receipt], ['/reports', 'Team Reports', BarChart3], ['/activity', 'Activity History', History], ['/profile', 'My Profile', UserCircle]],
-  sales: [['/', 'Dashboard', LayoutDashboard], ['/leads', 'My Leads', Target], ['/tasks', 'My Tasks', ListChecks], ['/customers', 'My Customers', Contact], ['/followups', 'Follow-ups', PhoneCall], ['/admissions', 'Courses & Admissions', GraduationCap], ['/invoices', 'Payment Updates', Receipt], ['/reports', 'My Performance', BarChart3], ['/profile', 'My Profile', UserCircle]],
+  sales: [['/', 'Dashboard', LayoutDashboard], ['/leads', 'My Leads', Target], ['/tasks', 'My Tasks', ListChecks], ['/customers', 'My Customers', Contact], ['/followups', 'Follow-ups', PhoneCall], ['/admissions', 'Courses & Admissions', GraduationCap], ['/invoices', 'Invoices & Payments', Receipt], ['/reports', 'My Performance', BarChart3], ['/profile', 'My Profile', UserCircle]],
 };
 
 function GlobalSearch() {
@@ -242,6 +379,7 @@ export default function Layout() {
               <span className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold sm:flex ${connected ? 'bg-brand-100 text-brand-700' : 'bg-amber-100 text-amber-700'}`}>
                 {connected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />}{connected ? 'Live' : 'Reconnecting…'}
               </span>
+              <NotificationBell />
               <div className="relative" ref={userMenuRef}>
                 <button className="flex items-center gap-2 rounded-lg p-1 sm:p-1.5 hover:bg-gray-100 transition" onClick={() => setMenu(!menu)} aria-label="User profile menu">
                   {user.avatar ? (

@@ -28,7 +28,16 @@ const router = crud({
       doc.$locals.changes = changes;
     },
   },
-  remove: { roles: ['superadmin'], check: async (doc) => { if (await Admission.exists({ customer: doc._id }) || await Invoice.exists({ customer: doc._id })) throw httpErr(409, 'Customer has admissions/invoices and cannot be deleted'); } },
+  remove: {
+    roles: ['superadmin', 'admin'],
+    check: async (doc) => {
+      const invoices = await Invoice.find({ customer: doc._id });
+      const invoiceIds = invoices.map((i) => i._id);
+      await Payment.deleteMany({ $or: [{ customer: doc._id }, { invoice: { $in: invoiceIds } }] });
+      await Invoice.deleteMany({ customer: doc._id });
+      await Admission.deleteMany({ customer: doc._id });
+    },
+  },
   onCreate: async (doc, req) => { await log(req.user, 'customer.created', 'Customer', doc._id, `Added customer ${doc.name}`, { team: doc.team }); emit('customer:created', doc); },
   onUpdate: async (doc, req) => { await log(req.user, 'customer.updated', 'Customer', doc._id, `Updated customer ${doc.name}`, { team: doc.team, changes: doc.$locals.changes || [] }); emit('customer:updated', doc); },
   onDelete: async (doc, req) => { await log(req.user, 'customer.deleted', 'Customer', doc._id, `Deleted customer ${doc.name}`, { team: doc.team }); emit('customer:updated', doc); },

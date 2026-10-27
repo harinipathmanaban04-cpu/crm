@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, FileSpreadsheet, Plus, Mail, Printer } from 'lucide-react';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { useLookups } from '../lookups.jsx';
@@ -7,6 +8,7 @@ import { EV } from '../socket.jsx';
 import ResourcePage from '../ResourcePage.jsx';
 import { Badge, Modal, Spinner, fmt, fmtDT, inr, roleLabel, toast, LEAD_STATUS_LIST } from '../ui.jsx';
 import { downloadAccountsPdf } from '../exportPdf.js';
+import NewInvoiceModal from './NewInvoiceModal.jsx';
 
 const o = (a) => a.map((x) => ({ value: x, label: x }));
 const SOURCES = o(['Website', 'Walk-in', 'Referral', 'Social Media', 'Phone Enquiry', 'Campaign', 'Direct']);
@@ -185,23 +187,275 @@ function LeadDetail({ id, onClose }) {
   );
 }
 export function LeadsPage({ mode }) {
-  const { user } = useAuth(); const lk = useLookups(); const staff = user.role !== 'sales'; const fu = mode === 'followups';
-  const [view, setView] = useState(null); const [assign, setAssign] = useState(null); const [follow, setFollow] = useState(null); const [val, setVal] = useState(''); const [fd, setFd] = useState({ note: '', next: '', status: '' }); const [tick, setTick] = useState(0);
-  const act = async (fn, msg, close) => { try { await fn(); toast(msg); close(); setTick((t) => t + 1); } catch (e) { toast(errMsg(e), 'error'); } };
+  const { user } = useAuth();
+  const lk = useLookups();
+  const staff = user.role !== 'sales';
+  const isSA = user.role === 'superadmin';
+  const isAdmin = user.role === 'admin';
+  const fu = mode === 'followups';
+
+  // Single-lead modals
+  const [view, setView] = useState(null);
+  const [assign, setAssign] = useState(null);
+  const [follow, setFollow] = useState(null);
+  const [val, setVal] = useState('');
+  const [fd, setFd] = useState({ note: '', next: '', status: '' });
+  const [tick, setTick] = useState(0);
+
+  // Bulk selection
+  const [selected, setSelected] = useState(new Set());
+
+  // Bulk assign to Admin modal (SuperAdmin only)
+  const [bulkAdminModal, setBulkAdminModal] = useState(false);
+  const [bulkAdminId, setBulkAdminId] = useState('');
+  const [bulkAdminLoading, setBulkAdminLoading] = useState(false);
+
+  // Bulk assign to Sales modal (Admin + SuperAdmin)
+  const [bulkSalesModal, setBulkSalesModal] = useState(false);
+  const [bulkSalesId, setBulkSalesId] = useState('');
+  const [bulkSalesLoading, setBulkSalesLoading] = useState(false);
+
+  // Import Excel modal
+  const [importModal, setImportModal] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importResults, setImportResults] = useState(null);
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
+
+  const act = async (fn, msg, close) => {
+    try { await fn(); toast(msg); close(); setTick((t) => t + 1); }
+    catch (e) { toast(errMsg(e), 'error'); }
+  };
+
+  // Toggle a lead in/out of selection
+  const toggleSelect = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Handle file selection for import
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFile(file);
+    setImportPreview(null);
+    setImportResults(null);
+    setImportLoading(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await api.post('/leads/import/preview', { data: base64 });
+      setImportPreview(res.data);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+      setImportFile(null);
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const fileToBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const doImport = async () => {
+    if (!importFile) return;
+    setImportLoading(true);
+    try {
+      const base64 = await fileToBase64(importFile);
+      const res = await api.post('/leads/import', { data: base64, skipDuplicates });
+      setImportResults(res.data);
+      setTick((t) => t + 1);
+      toast(`Import complete: ${res.data.imported} leads imported`);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const downloadTemplate = async () => {
+    try {
+      const res = await api.get('/leads/import/template', { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'leads-import-template.xlsx';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    }
+  };
+
+  const doBulkAssignAdmin = async () => {
+    if (!bulkAdminId || !selected.size) return;
+    setBulkAdminLoading(true);
+    try {
+      const res = await api.post('/leads/bulk-assign-admin', { leadIds: [...selected], adminId: bulkAdminId });
+      toast(`${res.data.assigned} lead${res.data.assigned !== 1 ? 's' : ''} assigned to admin`);
+      setSelected(new Set());
+      setBulkAdminModal(false);
+      setBulkAdminId('');
+      setTick((t) => t + 1);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    } finally {
+      setBulkAdminLoading(false);
+    }
+  };
+
+  const doBulkAssignSales = async () => {
+    if (!bulkSalesId || !selected.size) return;
+    setBulkSalesLoading(true);
+    try {
+      const res = await api.post('/leads/bulk-assign-sales', { leadIds: [...selected], salesId: bulkSalesId });
+      toast(`${res.data.assigned} lead${res.data.assigned !== 1 ? 's' : ''} assigned to sales executive`);
+      setSelected(new Set());
+      setBulkSalesModal(false);
+      setBulkSalesId('');
+      setTick((t) => t + 1);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    } finally {
+      setBulkSalesLoading(false);
+    }
+  };
+
+  const admins = lk.options('admins');
+  const salesList = lk.options('sales');
+
   return (
     <>
-      <ResourcePage title={fu ? 'Follow-ups' : user.role === 'sales' ? 'My Leads' : 'Lead Management'} subtitle={fu ? 'Leads with a follow-up due today or overdue' : 'Create, assign and track leads in real time'} endpoint="/leads" params={fu ? { followUp: 'due' } : {}} refreshKey={tick} events={[...EV.lead, ...EV.team]} newLabel="New Lead"
-        canCreate={staff && !fu} canEdit canDelete={staff && !fu} onRowClick={(r) => setView(r._id)}
-        filters={[{ key: 'status', label: 'Status', options: o(LEAD_STATUS_LIST) }, { key: 'priority', label: 'Priority', options: PRIOS }, { key: 'source', label: 'Source', options: SOURCES }, { key: 'course', label: 'Course', optionsKey: 'courses' },
-          { key: 'assignedTo', label: 'Owner', optionsKey: 'sales', hidden: (u) => u.role === 'sales' }, { key: 'team', label: 'Team', optionsKey: 'teams', hidden: (u) => u.role !== 'superadmin' }]}
-        columns={[{ label: 'Lead', render: (r) => <Two a={r.name} b={`${r.leadId} · ${r.phone}`} /> }, { label: 'Course', render: (r) => nm(r.course) }, { label: 'Source', key: 'source' }, { label: 'Status', render: (r) => <Badge>{r.status}</Badge> }, { label: 'Priority', render: (r) => <Badge>{r.priority}</Badge> },
-          { label: 'Assigned to', render: (r) => r.assignedTo?.name || <Badge tone="orange">Unassigned</Badge> }, ...(user.role === 'superadmin' ? [{ label: 'Team', render: (r) => nm(r.team) }] : []), { label: 'Follow-up', render: (r) => <span className={r.nextFollowUp && new Date(r.nextFollowUp) < new Date() && !['Converted', 'Lost'].includes(r.status) ? 'font-medium text-red-600' : ''}>{fmt(r.nextFollowUp)}</span> }]}
-        fields={[{ name: 'name', label: 'Student / customer name', required: true }, { name: 'phone', label: 'Phone', type: 'tel', required: true }, { name: 'email', label: 'Email', type: 'email' },
-          { name: 'course', label: 'Interested course', type: 'select', optionsKey: 'courses' }, { name: 'source', label: 'Lead source', type: 'select', options: SOURCES, default: 'Direct' }, { name: 'priority', label: 'Priority', type: 'select', options: PRIOS, default: 'Medium' },
-          { name: 'status', label: 'Status', type: 'select', options: o(LEAD_STATUS_LIST), default: 'New' }, { name: 'nextFollowUp', label: 'Next follow-up', type: 'date' },
+      <ResourcePage
+        title={fu ? 'Follow-ups' : user.role === 'sales' ? 'My Leads' : 'Lead Management'}
+        subtitle={fu ? 'Leads with a follow-up due today or overdue' : 'Create, assign and track leads in real time'}
+        endpoint="/leads"
+        params={fu ? { followUp: 'due' } : {}}
+        refreshKey={tick}
+        events={[...EV.lead, ...EV.team]}
+        newLabel="New Lead"
+        canCreate={staff && !fu}
+        canEdit
+        canDelete={staff && !fu}
+        onRowClick={(r) => setView(r._id)}
+        headerActions={
+          isSA && !fu ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              {selected.size > 0 && (
+                <>
+                  <span className="text-xs text-gray-500 font-medium">{selected.size} selected</span>
+                  <button
+                    type="button"
+                    className="btn btn-teal flex items-center gap-1.5 text-xs"
+                    onClick={() => { setBulkAdminModal(true); setBulkAdminId(''); }}
+                  >
+                    <Users className="h-3.5 w-3.5" />Assign to Admin
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary flex items-center gap-1.5 text-xs"
+                    onClick={() => { setBulkSalesModal(true); setBulkSalesId(''); }}
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />Assign to Sales
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost text-xs"
+                    onClick={() => setSelected(new Set())}
+                  >
+                    <X className="h-3.5 w-3.5" />Clear
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost flex items-center gap-1.5 text-xs border border-gray-200"
+                onClick={downloadTemplate}
+                title="Download sample Excel template"
+              >
+                <Download className="h-3.5 w-3.5" />Template
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary flex items-center gap-1.5 text-xs"
+                onClick={() => { setImportModal(true); setImportFile(null); setImportPreview(null); setImportResults(null); }}
+              >
+                <Upload className="h-3.5 w-3.5" />Import Excel
+              </button>
+            </div>
+          ) : (isAdmin && !fu && selected.size > 0) ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium">{selected.size} selected</span>
+              <button
+                type="button"
+                className="btn btn-primary flex items-center gap-1.5 text-xs"
+                onClick={() => { setBulkSalesModal(true); setBulkSalesId(''); }}
+              >
+                <UserPlus className="h-3.5 w-3.5" />Assign to Sales
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost text-xs"
+                onClick={() => setSelected(new Set())}
+              >
+                <X className="h-3.5 w-3.5" />Clear
+              </button>
+            </div>
+          ) : null
+        }
+        filters={[
+          { key: 'status', label: 'Status', options: o(LEAD_STATUS_LIST) },
+          { key: 'priority', label: 'Priority', options: PRIOS },
+          { key: 'source', label: 'Source', options: SOURCES },
+          { key: 'course', label: 'Course', optionsKey: 'courses' },
+          { key: 'assignedTo', label: 'Owner', optionsKey: 'sales', hidden: (u) => u.role === 'sales' },
+          { key: 'team', label: 'Team', optionsKey: 'teams', hidden: (u) => u.role !== 'superadmin' },
+        ]}
+        columns={[
+          ...(staff && !fu ? [{
+            label: '',
+            render: (r) => (
+              <button
+                className="p-1 text-gray-400 hover:text-coral-600 transition-colors"
+                onClick={(e) => { e.stopPropagation(); toggleSelect(r._id); }}
+                title={selected.has(r._id) ? 'Deselect' : 'Select'}
+              >
+                {selected.has(r._id)
+                  ? <CheckSquare className="h-4 w-4 text-coral-600" />
+                  : <Square className="h-4 w-4" />}
+              </button>
+            ),
+          }] : []),
+          { label: 'Lead', render: (r) => <Two a={r.name} b={r.leadId} /> },
+          { label: 'Course', render: (r) => nm(r.course) },
+          { label: 'Email', render: (r) => r.email ? <a href={`mailto:${r.email}`} className="text-gray-600 hover:text-brand-600 hover:underline truncate max-w-[190px] block" title={r.email} onClick={(e) => e.stopPropagation()}>{r.email}</a> : '—' },
+          { label: 'Mobile Number', render: (r) => r.phone ? <a href={`tel:${r.phone}`} className="whitespace-nowrap font-medium text-gray-700 hover:text-brand-600 hover:underline" onClick={(e) => e.stopPropagation()}>{r.phone}</a> : '—' },
+          { label: 'Source', key: 'source' },
+          { label: 'Status', render: (r) => <Badge>{r.status}</Badge> },
+          { label: 'Priority', render: (r) => <Badge>{r.priority}</Badge> },
+          { label: 'Assigned to', render: (r) => r.assignedTo?.name || <Badge tone="orange">Unassigned</Badge> },
+          ...(user.role === 'superadmin' ? [{ label: 'Team', render: (r) => nm(r.team) }] : []),
+          { label: 'Follow-up', render: (r) => <span className={r.nextFollowUp && new Date(r.nextFollowUp) < new Date() && !['Converted', 'Lost'].includes(r.status) ? 'font-medium text-red-600' : ''}>{fmt(r.nextFollowUp)}</span> },
+        ]}
+        fields={[
+          { name: 'name', label: 'Student / customer name', required: true },
+          { name: 'phone', label: 'Phone', type: 'tel', required: true },
+          { name: 'email', label: 'Email', type: 'email' },
+          { name: 'course', label: 'Interested course', type: 'select', optionsKey: 'courses' },
+          { name: 'source', label: 'Lead source', type: 'select', options: SOURCES, default: 'Direct' },
+          { name: 'priority', label: 'Priority', type: 'select', options: PRIOS, default: 'Medium' },
+          { name: 'status', label: 'Status', type: 'select', options: o(LEAD_STATUS_LIST), default: 'New' },
+          { name: 'nextFollowUp', label: 'Next follow-up', type: 'date' },
           { name: 'assignedTo', label: 'Assign to Sales Executive', type: 'select', optionsKey: 'sales', createOnly: true },
           { name: 'team', label: 'Assigned team', type: 'select', optionsKey: 'teams', createOnly: true, hidden: (v, e, u) => u.role !== 'superadmin' || !!v.assignedTo, hint: 'Used when no Sales Executive is selected' },
-          { name: 'notes', label: 'Notes', type: 'textarea' }]}
+          { name: 'notes', label: 'Notes', type: 'textarea' },
+        ]}
         actions={(r) => (
           <>
             <button className="icon-btn" title="View" onClick={() => setView(r._id)}><Eye className="h-4 w-4" /></button>
@@ -209,15 +463,28 @@ export function LeadsPage({ mode }) {
             <button className="icon-btn" title="Record follow-up" onClick={() => { setFollow(r); setFd({ note: '', next: '', status: '' }); }}><PhoneCall className="h-4 w-4" /></button>
             {r.status !== 'Converted' && !r.customer && <button className="icon-btn hover:text-green-600" title="Convert to customer" onClick={() => act(() => api.post(`/leads/${r._id}/convert`), 'Converted to customer', () => {})}><UserCheck className="h-4 w-4" /></button>}
           </>
-        )} />
+        )}
+      />
+
+      {/* Single lead detail modal */}
       {view && <LeadDetail id={view} onClose={() => setView(null)} />}
+
+      {/* Single lead assign modal */}
       {assign && (
         <Modal title={`Assign — ${assign.name}`} onClose={() => setAssign(null)}>
           <label className="label">Sales Executive</label>
-          <select className="input" value={val} onChange={(e) => setVal(e.target.value)}><option value="">Select…</option>{lk.options('sales').map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select>
-          <div className="mt-5 flex justify-end gap-2"><button className="btn btn-ghost" onClick={() => setAssign(null)}>Cancel</button><button className="btn btn-primary" disabled={!val} onClick={() => act(() => api.post(`/leads/${assign._id}/assign`, { assignedTo: val }), 'Lead assigned', () => setAssign(null))}>Assign</button></div>
+          <select className="input" value={val} onChange={(e) => setVal(e.target.value)}>
+            <option value="">Select…</option>
+            {lk.options('sales').map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+          </select>
+          <div className="mt-5 flex justify-end gap-2">
+            <button className="btn btn-ghost" onClick={() => setAssign(null)}>Cancel</button>
+            <button className="btn btn-primary" disabled={!val} onClick={() => act(() => api.post(`/leads/${assign._id}/assign`, { assignedTo: val }), 'Lead assigned', () => setAssign(null))}>Assign</button>
+          </div>
         </Modal>
       )}
+
+      {/* Follow-up modal */}
       {follow && (
         <Modal title={`Follow-up — ${follow.name}`} onClose={() => setFollow(null)}>
           <div className="space-y-4">
@@ -226,7 +493,171 @@ export function LeadsPage({ mode }) {
               <div><label className="label">Next follow-up date</label><input type="date" className="input" value={fd.next} onChange={(e) => setFd({ ...fd, next: e.target.value })} /></div>
               <div><label className="label">Update status</label><select className="input" value={fd.status} onChange={(e) => setFd({ ...fd, status: e.target.value })}><option value="">Keep ({follow.status})</option>{LEAD_STATUS_LIST.map((s) => <option key={s}>{s}</option>)}</select></div>
             </div>
-            <div className="flex justify-end gap-2"><button className="btn btn-ghost" onClick={() => setFollow(null)}>Cancel</button><button className="btn btn-primary" disabled={!fd.note.trim()} onClick={() => act(() => api.post(`/leads/${follow._id}/followup`, fd), 'Follow-up saved', () => setFollow(null))}>Save</button></div>
+            <div className="flex justify-end gap-2">
+              <button className="btn btn-ghost" onClick={() => setFollow(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={!fd.note.trim()} onClick={() => act(() => api.post(`/leads/${follow._id}/followup`, fd), 'Follow-up saved', () => setFollow(null))}>Save</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk assign to Admin modal (SuperAdmin only) */}
+      {bulkAdminModal && (
+        <Modal title={`Assign ${selected.size} lead${selected.size !== 1 ? 's' : ''} to Admin`} onClose={() => setBulkAdminModal(false)}>
+          <p className="mb-3 text-sm text-gray-500">The leads will become visible to the selected Admin's team.</p>
+          <label className="label">Select Admin *</label>
+          <select className="input" value={bulkAdminId} onChange={(e) => setBulkAdminId(e.target.value)}>
+            <option value="">Choose an Admin…</option>
+            {admins.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+          </select>
+          <div className="mt-5 flex justify-end gap-2">
+            <button className="btn btn-ghost" onClick={() => setBulkAdminModal(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={!bulkAdminId || bulkAdminLoading} onClick={doBulkAssignAdmin}>
+              {bulkAdminLoading ? 'Assigning…' : 'Assign to Admin'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk assign to Sales modal (Admin + SuperAdmin) */}
+      {bulkSalesModal && (
+        <Modal title={`Assign ${selected.size} lead${selected.size !== 1 ? 's' : ''} to Sales Executive`} onClose={() => setBulkSalesModal(false)}>
+          <label className="label">Select Sales Executive *</label>
+          <select className="input" value={bulkSalesId} onChange={(e) => setBulkSalesId(e.target.value)}>
+            <option value="">Choose a Sales Executive…</option>
+            {salesList.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
+          </select>
+          <div className="mt-5 flex justify-end gap-2">
+            <button className="btn btn-ghost" onClick={() => setBulkSalesModal(false)}>Cancel</button>
+            <button className="btn btn-primary" disabled={!bulkSalesId || bulkSalesLoading} onClick={doBulkAssignSales}>
+              {bulkSalesLoading ? 'Assigning…' : 'Assign to Sales'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Import Excel modal */}
+      {importModal && (
+        <Modal title="Import Leads from Excel / CSV" onClose={() => setImportModal(false)} wide>
+          <div className="space-y-4 text-sm">
+            {!importResults ? (
+              <>
+                <div className="rounded-lg border-2 border-dashed border-gray-200 p-6 text-center">
+                  <FileSpreadsheet className="mx-auto mb-2 h-10 w-10 text-gray-300" />
+                  <p className="text-gray-500 mb-3">Select an Excel (.xlsx) or CSV file</p>
+                  <label className="btn btn-primary cursor-pointer inline-flex items-center gap-2">
+                    <Upload className="h-4 w-4" />
+                    {importFile ? 'Change File' : 'Choose File'}
+                    <input type="file" accept=".xlsx,.csv,.xls" className="hidden" onChange={handleFileChange} />
+                  </label>
+                  {importFile && <p className="mt-2 text-xs text-gray-400">{importFile.name} ({(importFile.size / 1024).toFixed(1)} KB)</p>}
+                </div>
+
+                {importLoading && <div className="flex items-center gap-2 text-gray-500"><Spinner /><span>Analysing file…</span></div>}
+
+                {importPreview && !importLoading && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium text-gray-700">
+                        <span className="text-green-600 font-bold">{importPreview.totalRows}</span> rows detected
+                      </p>
+                      {importPreview.missingRequired?.length > 0 && (
+                        <span className="flex items-center gap-1 text-amber-600 text-xs font-medium">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          Missing columns: {importPreview.missingRequired.join(', ')}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-xs text-gray-500">
+                      <span className="font-medium">Mapped columns: </span>
+                      {Object.values(importPreview.mappedColumns).join(', ') || 'None detected'}
+                    </div>
+
+                    {importPreview.preview?.length > 0 && (
+                      <div className="overflow-x-auto rounded border border-gray-200">
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              {Object.keys(importPreview.preview[0]).filter((k) => k !== '_rowNum').map((k) => (
+                                <th key={k} className="px-2 py-1.5 text-left font-medium text-gray-600 capitalize">{k}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {importPreview.preview.map((row, i) => (
+                              <tr key={i} className="border-t border-gray-100">
+                                {Object.entries(row).filter(([k]) => k !== '_rowNum').map(([k, v]) => (
+                                  <td key={k} className="px-2 py-1.5 text-gray-700 max-w-[150px] truncate">{v || '—'}</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {importPreview.totalRows > 5 && (
+                          <p className="px-2 py-1.5 text-xs text-gray-400 bg-gray-50 border-t border-gray-100">
+                            Showing first 5 of {importPreview.totalRows} rows
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={skipDuplicates} onChange={(e) => setSkipDuplicates(e.target.checked)} className="rounded" />
+                      <span>Skip duplicate leads (same phone/email already in database)</span>
+                    </label>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button className="btn btn-ghost" onClick={() => setImportModal(false)}>Cancel</button>
+                  <button
+                    className="btn btn-primary flex items-center gap-2"
+                    disabled={!importPreview || importLoading || importPreview.missingRequired?.length > 0}
+                    onClick={doImport}
+                  >
+                    {importLoading ? <><Spinner />Importing…</> : <><Upload className="h-4 w-4" />Import {importPreview?.totalRows || ''} Leads</>}
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Import Results */
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="rounded-lg bg-green-50 border border-green-200 p-3">
+                    <p className="text-2xl font-bold text-green-600">{importResults.imported}</p>
+                    <p className="text-xs text-green-700 mt-1">Imported</p>
+                  </div>
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                    <p className="text-2xl font-bold text-amber-600">{importResults.duplicates}</p>
+                    <p className="text-xs text-amber-700 mt-1">Duplicates skipped</p>
+                  </div>
+                  <div className="rounded-lg bg-red-50 border border-red-200 p-3">
+                    <p className="text-2xl font-bold text-red-600">{importResults.failed}</p>
+                    <p className="text-xs text-red-700 mt-1">Failed</p>
+                  </div>
+                </div>
+
+                {importResults.errors?.length > 0 && (
+                  <div>
+                    <p className="font-medium text-gray-700 mb-2 text-sm">Issues ({importResults.errors.length})</p>
+                    <div className="max-h-48 overflow-y-auto rounded border border-gray-200 bg-gray-50">
+                      {importResults.errors.map((e, i) => (
+                        <div key={i} className="px-3 py-1.5 text-xs border-b border-gray-100 last:border-0">
+                          <span className="font-medium text-gray-600">Row {e.row}: </span>
+                          <span className="text-red-600">{e.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2">
+                  <button className="btn btn-ghost" onClick={() => { setImportFile(null); setImportPreview(null); setImportResults(null); }}>Import Another</button>
+                  <button className="btn btn-primary" onClick={() => setImportModal(false)}>Done</button>
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}
@@ -239,14 +670,14 @@ export function TasksPage() {
   const { user } = useAuth(); const staff = user.role !== 'sales'; const [tick, setTick] = useState(0);
   const od = (r) => ['To Do', 'In Progress'].includes(r.status) && r.dueDate && new Date(r.dueDate) < new Date();
   return (
-    <ResourcePage title={user.role === 'sales' ? 'My Tasks' : 'Task Management'} subtitle="Assign and track work for Sales Executives" endpoint="/tasks" refreshKey={tick} events={[...EV.task, ...EV.team]} newLabel="New Task" canCreate={staff} canEdit canDelete={staff}
+    <ResourcePage title={user.role === 'sales' ? 'My Tasks' : 'Task Management'} subtitle="Assign and track work for Sales Executives" endpoint="/tasks" refreshKey={tick} events={[...EV.task, ...EV.team]} newLabel="New Task" canCreate canEdit canDelete={staff}
       filters={[{ key: 'status', label: 'Status', options: o(['To Do', 'In Progress', 'Completed', 'Cancelled']) }, { key: 'priority', label: 'Priority', options: PRIOS }, { key: 'overdue', label: 'Due', options: [{ value: '1', label: 'Overdue only' }] }, { key: 'assignee', label: 'Assignee', optionsKey: 'sales', hidden: (u) => u.role === 'sales' }]}
       columns={[{ label: 'Task', render: (r) => <Two a={r.title} b={r.lead ? `Lead: ${r.lead.name}` : r.customer ? `Customer: ${r.customer.name}` : ''} /> }, { label: 'Assignee', render: (r) => nm(r.assignee) }, { label: 'Priority', render: (r) => <Badge>{r.priority}</Badge> }, { label: 'Status', render: (r) => <Badge>{r.status}</Badge> },
         { label: 'Due', render: (r) => <span className={od(r) ? 'font-medium text-red-600' : ''}>{fmt(r.dueDate)}{od(r) && ' (overdue)'}</span> }, { label: 'Created by', render: (r) => nm(r.createdBy) }]}
-      fields={[{ name: 'title', label: 'Title', required: true, full: true, readOnlyFor: 'sales' }, { name: 'description', label: 'Description', type: 'textarea', readOnlyFor: 'sales' }, { name: 'assignee', label: 'Assign to', type: 'select', optionsKey: 'sales', required: true, readOnlyFor: 'sales' },
-        { name: 'priority', label: 'Priority', type: 'select', options: PRIOS, default: 'Medium', readOnlyFor: 'sales' }, { name: 'dueDate', label: 'Due date', type: 'date', required: true, readOnlyFor: 'sales' },
+      fields={[{ name: 'title', label: 'Title', required: true, full: true }, { name: 'description', label: 'Description', type: 'textarea' }, { name: 'assignee', label: 'Assign to', type: 'select', optionsKey: 'sales', required: true },
+        { name: 'priority', label: 'Priority', type: 'select', options: PRIOS, default: 'Medium' }, { name: 'dueDate', label: 'Due date', type: 'date', required: true },
         { name: 'status', label: 'Status', type: 'select', options: o(['To Do', 'In Progress', 'Completed', 'Cancelled']), default: 'To Do', required: true },
-        { name: 'lead', label: 'Linked lead', type: 'select', optionsKey: 'leads', readOnlyFor: 'sales' }, { name: 'customer', label: 'Linked customer', type: 'select', optionsKey: 'customers', readOnlyFor: 'sales' }]}
+        { name: 'lead', label: 'Linked lead', type: 'select', optionsKey: 'leads' }, { name: 'customer', label: 'Linked customer', type: 'select', optionsKey: 'customers' }]}
       actions={(r) => r.status !== 'Completed' && r.status !== 'Cancelled' && <button className="icon-btn hover:text-green-600" title="Mark complete" onClick={async () => { try { await api.put(`/tasks/${r._id}`, { status: 'Completed' }); toast('Task completed'); setTick((t) => t + 1); } catch (e) { toast(errMsg(e), 'error'); } }}><Check className="h-4 w-4" /></button>} />
   );
 }
@@ -276,9 +707,10 @@ function CustomerProfile({ id, onClose }) {
 }
 export function CustomersPage() {
   const { user } = useAuth(); const [view, setView] = useState(null);
+  const canDeleteCustomer = user.role === 'superadmin' || user.role === 'admin';
   return (
     <>
-      <ResourcePage title={user.role === 'superadmin' ? 'All Customers' : user.role === 'sales' ? 'My Customers' : 'Customers'} subtitle="One shared customer directory — updated live across all roles" endpoint="/customers" events={[...EV.customer, ...EV.team, ...EV.adm]} newLabel="Add Customer" canCreate canEdit canDelete={user.role === 'superadmin'} onRowClick={(r) => setView(r._id)}
+      <ResourcePage title={user.role === 'superadmin' ? 'All Customers' : user.role === 'sales' ? 'My Customers' : 'Customers'} subtitle="One shared customer directory — updated live across all roles" endpoint="/customers" events={[...EV.customer, ...EV.team, ...EV.adm]} newLabel="Add Customer" canCreate canEdit canDelete={canDeleteCustomer} onRowClick={(r) => setView(r._id)}
         filters={[{ key: 'course', label: 'Course', optionsKey: 'courses' }, { key: 'admissionStatus', label: 'Admission', options: o(['Not Started', 'In Progress', 'Admitted', 'Dropped']) }, { key: 'owner', label: 'Owner', optionsKey: 'owners', hidden: (u) => u.role === 'sales' }, { key: 'team', label: 'Team', optionsKey: 'teams', hidden: (u) => u.role !== 'superadmin' }]}
         columns={[{ label: 'Customer', render: (r) => <Two a={r.name} b={`${r.phone}${r.email ? ' · ' + r.email : ''}`} /> }, { label: 'Course', render: (r) => nm(r.course) }, { label: 'Owner', render: (r) => nm(r.owner) }, ...(user.role === 'superadmin' ? [{ label: 'Team', render: (r) => nm(r.team) }] : []), { label: 'Admission', render: (r) => <Badge>{r.admissionStatus}</Badge> }, { label: 'Added', render: (r) => fmt(r.createdAt) }]}
         fields={[{ name: 'name', label: 'Name', required: true }, { name: 'phone', label: 'Phone', type: 'tel', required: true }, { name: 'email', label: 'Email', type: 'email' }, { name: 'course', label: 'Course interest', type: 'select', optionsKey: 'courses' },
@@ -291,20 +723,22 @@ export function CustomersPage() {
 
 /* ---------------- Courses & Admissions ---------------- */
 export function AdmissionsPage() {
-  const { user } = useAuth(); const [tab, setTab] = useState('Admissions');
+  const { user } = useAuth();
+  const staff = user.role !== 'sales';
+  const [tab, setTab] = useState('Admissions');
   return (
     <div className="space-y-4">
       <div><h1 className="text-xl font-semibold">Courses & Admissions</h1><p className="text-sm text-gray-500">Track enrollment stages, fees and admission status</p></div>
       {tabs(['Admissions', 'Courses'], tab, setTab)}
       {tab === 'Admissions' ? (
-        <ResourcePage embedded title="Admission" endpoint="/admissions" events={[...EV.adm, ...EV.customer, ...EV.team]} newLabel="New Admission" canCreate canEdit canDelete={user.role !== 'sales'} dateFilter={false}
+        <ResourcePage embedded title="Admission" endpoint="/admissions" events={[...EV.adm, ...EV.customer, ...EV.team]} newLabel="New Admission" canCreate canEdit canDelete={staff} dateFilter={false}
           filters={[{ key: 'stage', label: 'Stage', options: o(['Enquiry', 'Counselling', 'Registered', 'Enrolled', 'Completed', 'Dropped']) }, { key: 'status', label: 'Status', options: o(['Pending', 'Confirmed', 'Cancelled']) }, { key: 'course', label: 'Course', optionsKey: 'courses' }]}
           columns={[{ label: 'Customer', render: (r) => <Two a={nm(r.customer)} b={r.customer?.phone} /> }, { label: 'Course', render: (r) => nm(r.course) }, { label: 'Stage', render: (r) => <Badge>{r.stage}</Badge> }, { label: 'Status', render: (r) => <Badge>{r.status}</Badge> }, { label: 'Admission date', render: (r) => fmt(r.admissionDate) }, { label: 'Fee', render: (r) => inr(r.fee) }, { label: 'Owner', render: (r) => nm(r.owner) }]}
-          fields={[{ name: 'customer', label: 'Customer', type: 'select', optionsKey: 'customers', required: true, createOnly: true }, { name: 'course', label: 'Course', type: 'select', optionsKey: 'courses', required: true, createOnly: true },
+          fields={[{ name: 'customer', label: 'Customer', type: 'select', optionsKey: 'customers', required: true, createOnly: true }, { name: 'course', label: 'Course', type: 'select', optionsKey: 'courses', required: true, createOnly: true }, { name: 'mode', label: 'Internship Mode', type: 'select', options: o(['Online', 'Offline']), default: 'Online' },
             { name: 'stage', label: 'Enrollment stage', type: 'select', options: o(['Enquiry', 'Counselling', 'Registered', 'Enrolled', 'Completed', 'Dropped']), default: 'Enquiry' }, { name: 'status', label: 'Admission status', type: 'select', options: o(['Pending', 'Confirmed', 'Cancelled']), default: 'Pending' },
             { name: 'admissionDate', label: 'Admission date', type: 'date' }, { name: 'fee', label: 'Fee amount (₹)', type: 'number' }]} />
       ) : (
-        <ResourcePage embedded title="Course" endpoint="/courses" newLabel="Add Course" canCreate={user.role === 'superadmin'} canEdit={user.role === 'superadmin'} canDelete={user.role === 'superadmin'} dateFilter={false}
+        <ResourcePage embedded title="Course" endpoint="/courses" newLabel="Add Course" canCreate={staff} canEdit={staff} canDelete={staff} dateFilter={false}
           columns={[{ label: 'Course', key: 'name' }, { label: 'Fee', render: (r) => inr(r.fee) }, { label: 'Duration', render: (r) => r.duration || '—' }, { label: 'Status', render: (r) => <Badge>{r.active ? 'Active' : 'Inactive'}</Badge> }]}
           fields={[{ name: 'name', label: 'Course name', required: true }, { name: 'fee', label: 'Fee (₹)', type: 'number' }, { name: 'duration', label: 'Duration' }, { name: 'active', label: 'Status', type: 'select', bool: true, options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Inactive' }] }, { name: 'description', label: 'Description', type: 'textarea' }]} />
       )}
@@ -314,23 +748,183 @@ export function AdmissionsPage() {
 
 /* ---------------- Invoices & Payments ---------------- */
 export function InvoicesPage() {
-  const { user } = useAuth(); const staff = user.role !== 'sales'; const [tab, setTab] = useState('Invoices');
+  const { user } = useAuth();
+  const staff = user.role !== 'sales';
+  const [tab, setTab] = useState('Invoices');
+  const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const nav = useNavigate();
+
+  const handleDownloadPdf = async (e, invoiceId, invoiceNo) => {
+    e.stopPropagation();
+    try {
+      const res = await api.get(`/invoices/${invoiceId}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${invoiceNo || 'invoice'}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast('PDF downloaded');
+    } catch (err) {
+      toast(errMsg(err), 'error');
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div><h1 className="text-xl font-semibold">{staff ? 'Invoices & Payments' : 'Payment Updates'}</h1><p className="text-sm text-gray-500">{staff ? 'Create invoices and verify payments' : 'Log payment updates; an Admin verifies them before they count as paid'}</p></div>
+      <div>
+        <h1 className="text-xl font-semibold">Invoices & Payments</h1>
+        <p className="text-sm text-gray-500">
+          Create invoices, manage installments, and track payments
+        </p>
+      </div>
+
       {tabs(['Invoices', 'Payments'], tab, setTab)}
+
       {tab === 'Invoices' ? (
-        <ResourcePage embedded title="Invoice" endpoint="/invoices" events={[...EV.pay, ...EV.customer, ...EV.team]} newLabel="New Invoice" canCreate={staff} canEdit={staff} canDelete={user.role === 'superadmin'}
-          filters={[{ key: 'status', label: 'Status', options: o(['Pending', 'Partially Paid', 'Paid', 'Failed', 'Refunded']) }, { key: 'course', label: 'Course', optionsKey: 'courses' }]}
-          columns={[{ label: 'Invoice', key: 'invoiceNo' }, { label: 'Customer', render: (r) => nm(r.customer) }, { label: 'Course', render: (r) => nm(r.course) }, { label: 'Total', render: (r) => inr(r.total) }, { label: 'Paid', render: (r) => inr(r.paid) }, { label: 'Balance', render: (r) => inr(r.total - r.paid) }, { label: 'Status', render: (r) => <Badge>{r.status}</Badge> }, { label: 'Last payment', render: (r) => r.paymentDate ? `${fmt(r.paymentDate)} · ${r.method || ''}` : '—' }]}
-          fields={[{ name: 'customer', label: 'Customer', type: 'select', optionsKey: 'customers', required: true, createOnly: true }, { name: 'course', label: 'Course', type: 'select', optionsKey: 'courses' }, { name: 'total', label: 'Total fee (₹)', type: 'number', required: true }, { name: 'dueDate', label: 'Due date', type: 'date' }]} />
+        <>
+          <ResourcePage
+            embedded
+            title="Invoice"
+            endpoint="/invoices"
+            events={[...EV.pay, ...EV.customer, ...EV.team]}
+            canCreate={false}
+            canEdit={false}
+            canDelete={staff}
+            refreshKey={refreshKey}
+            headerActions={
+              <button
+                type="button"
+                className="btn btn-primary flex items-center gap-1.5"
+                onClick={() => setShowNewInvoice(true)}
+              >
+                <Plus className="h-4 w-4" /> New Invoice
+              </button>
+            }
+            onRowClick={(r) => nav(`/invoices/${r._id}`)}
+            filters={[
+              { key: 'status', label: 'Status', options: o(['Pending', 'Partially Paid', 'Paid', 'Overdue', 'Cancelled']) },
+              { key: 'course', label: 'Course', optionsKey: 'courses' },
+            ]}
+            columns={[
+              {
+                label: 'Invoice No.',
+                render: (r) => <span className="font-mono font-semibold text-teal-800">{r.invoiceNo}</span>,
+              },
+              {
+                label: 'Customer / Student',
+                render: (r) => (
+                  <div>
+                    <p className="font-medium text-gray-900">{r.customerName || nm(r.customer)}</p>
+                    {r.customerPhone && <p className="text-xs text-gray-400">{r.customerPhone}</p>}
+                  </div>
+                ),
+              },
+              {
+                label: 'Program / Course',
+                render: (r) => r.programName || nm(r.course) || '—',
+              },
+              {
+                label: 'Total Fee',
+                render: (r) => <span className="font-semibold">{inr(r.total)}</span>,
+              },
+              {
+                label: 'Paid',
+                render: (r) => <span className="font-medium text-green-600">{inr(r.paid)}</span>,
+              },
+              {
+                label: 'Balance',
+                render: (r) => {
+                  const b = (r.total || 0) - (r.paid || 0);
+                  return <span className={`font-medium ${b > 0 ? 'text-coral-600' : 'text-gray-500'}`}>{inr(b)}</span>;
+                },
+              },
+              {
+                label: 'Email',
+                render: (r) => (
+                  <Badge tone={r.emailStatus === 'Sent' ? 'green' : r.emailStatus === 'Failed' ? 'red' : 'gray'}>
+                    {r.emailStatus || 'Not Sent'}
+                  </Badge>
+                ),
+              },
+              {
+                label: 'Status',
+                render: (r) => (
+                  <Badge tone={r.status === 'Paid' ? 'green' : r.status === 'Overdue' ? 'red' : 'amber'}>
+                    {r.status}
+                  </Badge>
+                ),
+              },
+            ]}
+            actions={(r) => (
+              <div className="flex items-center gap-1">
+                <button
+                  className="icon-btn text-teal-600 hover:bg-teal-50"
+                  title="View invoice details & preview"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    nav(`/invoices/${r._id}`);
+                  }}
+                >
+                  <Eye className="h-4 w-4" />
+                </button>
+                <button
+                  className="icon-btn text-blue-600 hover:bg-blue-50"
+                  title="Download PDF"
+                  onClick={(e) => handleDownloadPdf(e, r._id, r.invoiceNo)}
+                >
+                  <Download className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+          />
+
+          {showNewInvoice && (
+            <NewInvoiceModal
+              onClose={() => setShowNewInvoice(false)}
+              onSuccess={() => setRefreshKey((k) => k + 1)}
+            />
+          )}
+        </>
       ) : (
-        <ResourcePage embedded title="Payment" endpoint="/payments" events={[...EV.pay, ...EV.team]} newLabel={staff ? 'Record Payment' : 'Log Payment Update'} canCreate canEdit={staff}
-          filters={[{ key: 'status', label: 'Status', options: o(['Pending', 'Success', 'Failed', 'Refunded']) }, { key: 'method', label: 'Method', options: o(['Cash', 'UPI', 'Card', 'Bank Transfer', 'Cheque', 'Online']) }]}
-          columns={[{ label: 'Invoice', render: (r) => r.invoice?.invoiceNo || '—' }, { label: 'Customer', render: (r) => nm(r.customer) }, { label: 'Amount', render: (r) => inr(r.amount) }, { label: 'Method', key: 'method' }, { label: 'Txn ref', render: (r) => r.txnRef || '—' }, { label: 'Date', render: (r) => fmt(r.paymentDate) }, { label: 'Status', render: (r) => <Badge>{r.status}</Badge> }, { label: 'Recorded by', render: (r) => nm(r.recordedBy) }]}
-          fields={[{ name: 'invoice', label: 'Invoice', type: 'select', optionsKey: 'invoices', required: true, createOnly: true }, { name: 'amount', label: 'Amount (₹)', type: 'number', required: true }, { name: 'method', label: 'Method', type: 'select', options: o(['Cash', 'UPI', 'Card', 'Bank Transfer', 'Cheque', 'Online']), default: 'Cash' },
-            { name: 'txnRef', label: 'Transaction reference' }, { name: 'paymentDate', label: 'Payment date', type: 'date' },
-            { name: 'status', label: 'Status', type: 'select', options: o(['Pending', 'Success', 'Failed', 'Refunded']), default: 'Success', hidden: (v, e, u) => u.role === 'sales' }]} />
+        <ResourcePage
+          embedded
+          title="Payment"
+          endpoint="/payments"
+          events={[...EV.pay, ...EV.team]}
+          newLabel={staff ? 'Record Payment' : 'Log Payment Update'}
+          canCreate
+          canEdit={staff}
+          canDelete={staff}
+          filters={[
+            { key: 'status', label: 'Status', options: o(['Pending', 'Success', 'Paid', 'Failed', 'Refunded']) },
+            { key: 'method', label: 'Method', options: o(['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other']) },
+          ]}
+          columns={[
+            { label: 'Invoice', render: (r) => <span className="font-mono">{r.invoice?.invoiceNo || '—'}</span> },
+            { label: 'Customer', render: (r) => nm(r.customer) },
+            { label: 'Amount', render: (r) => inr(r.amount) },
+            { label: 'Method', key: 'method' },
+            { label: 'Description', render: (r) => r.description || '—' },
+            { label: 'Txn Ref', render: (r) => r.txnRef || '—' },
+            { label: 'Date', render: (r) => fmt(r.paymentDate) },
+            { label: 'Status', render: (r) => <Badge tone={r.status === 'Success' || r.status === 'Paid' ? 'green' : 'amber'}>{r.status}</Badge> },
+            { label: 'Recorded by', render: (r) => nm(r.recordedBy) },
+          ]}
+          fields={[
+            { name: 'invoice', label: 'Invoice', type: 'select', optionsKey: 'invoices', required: true, createOnly: true },
+            { name: 'amount', label: 'Amount (₹)', type: 'number', required: true },
+            { name: 'method', label: 'Method', type: 'select', options: o(['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other']), default: 'UPI' },
+            { name: 'description', label: 'Description' },
+            { name: 'emiNumber', label: 'EMI / Installment No.' },
+            { name: 'txnRef', label: 'Transaction reference' },
+            { name: 'paymentDate', label: 'Payment date', type: 'date' },
+            { name: 'status', label: 'Status', type: 'select', options: o(['Pending', 'Success', 'Paid', 'Failed', 'Refunded']), default: 'Success', hidden: (v, e, u) => u.role === 'sales' },
+          ]}
+        />
       )}
     </div>
   );

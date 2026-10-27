@@ -119,7 +119,22 @@ export default function ResourcePage({ title, subtitle, endpoint, columns, filte
         <Modal title={modal.row ? `Edit ${title}` : newLabel} onClose={() => setModal(null)}>
           <form onSubmit={submit}>
             <div className="grid gap-4 sm:grid-cols-2">
-              {fields.filter(visible).map((fl) => <Field key={fl.name} f={fl} value={vals[fl.name]} options={fl.type === 'select' ? optsFor(fl) : []} disabled={fl.readOnlyFor === user.role} onChange={(v) => setVals((x) => ({ ...x, [fl.name]: v }))} />)}
+              {fields.filter(visible).map((fl) => <Field key={fl.name} f={fl} value={vals[fl.name]} options={fl.type === 'select' ? optsFor(fl) : []} disabled={fl.readOnly || fl.readOnlyFor === user.role} onChange={(v) => setVals((x) => {
+              const next = { ...x, [fl.name]: v };
+              if (fl.name === 'customer') {
+                const cust = lk.customers?.find((c) => c._id === v);
+                next.customerEmail = cust?.email || '';
+              }
+              if (fl.name === 'mode') {
+                if (!x.totalInternshipFee || x.totalInternshipFee === '' || x.totalInternshipFee === 20000 || x.totalInternshipFee === 30000) {
+                  next.totalInternshipFee = v === 'Offline' ? 30000 : 20000;
+                }
+              }
+              if (fl.name === 'registrationFee' && (x.total == null || x.total === '')) {
+                // keep total in sync for legacy
+              }
+              return next;
+            })} />)}
             </div>
             <div className="mt-6 flex justify-end gap-2"><button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button><button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>
           </form>

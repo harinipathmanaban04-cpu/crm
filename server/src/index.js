@@ -3,7 +3,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dns from "node:dns";
 
-dns.setServers(["8.8.8.8", "1.1.1.1"]);
+try {
+  dns.setServers(["8.8.8.8", "1.1.1.1"]);
+} catch (e) {
+  // Use default system resolver if custom servers cannot be set
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
@@ -25,8 +29,27 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
 const server = http.createServer(app);
 initSocket(server, allowedOrigins);
 
-const p = process.env.PORT || 5000;
+const p = Number(process.env.PORT) || 5000;
+server.on('error', (err) => {
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${p} is already in use. Stop the other process or change PORT in server/.env.`);
+  } else {
+    console.error('❌ HTTP server error:', err);
+  }
+  process.exit(1);
+});
 server.listen(p, '0.0.0.0', () => console.log(`✅ API + Socket.IO running on http://localhost:${p}`));
+
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught exception:', err);
+  // Do not crash server on transient socket resets or client disconnects
+  if (err && (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ETIMEDOUT')) {
+    return;
+  }
+});
 
 const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/eco_crm';
 mongoose.connect(mongoUri)
@@ -48,5 +71,5 @@ mongoose.connect(mongoUri)
   })
   .catch((e) => {
     console.error('❌ MongoDB connection failed:', e.message);
-    console.error('👉 Please make sure MongoDB is running on your machine (mongodb://localhost:27017)');
+    console.error('👉 Please make sure MongoDB is running on your machine (mongodb://localhost:27017) or set MONGO_URI in server/.env');
   });

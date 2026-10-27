@@ -9,7 +9,14 @@ import { log } from '../services/activity.js';
 const r = Router();
 const notify = (u) => emitRooms('user:updated', ['role:superadmin', ...(u.team ? [`team:${u.team}`] : [])], { id: String(u._id) });
 const get = (id) => User.findById(id).populate({ path: 'team', select: 'name admin', populate: { path: 'admin', select: 'name email phone' } });
-const target = async (id) => { const u = await User.findById(id); if (!u) throw httpErr(404, 'User not found'); if (u.role === 'superadmin') throw httpErr(403, 'Super Admin accounts cannot be modified here'); return u; };
+const target = async (id, reqUser) => {
+  const u = await User.findById(id);
+  if (!u) throw httpErr(404, 'User not found');
+  if (u.role === 'superadmin' && reqUser && reqUser.role !== 'superadmin') {
+    throw httpErr(403, 'Super Admin accounts cannot be modified here');
+  }
+  return u;
+};
 
 r.get('/', async (req, res) => {
   const q = req.query; const c = [];
@@ -42,7 +49,7 @@ r.get('/', async (req, res) => {
 
 r.post('/', requireRole('superadmin'), async (req, res) => {
   const { name, email, role, team, password, phone } = req.body;
-  if (!['admin', 'sales'].includes(role)) throw httpErr(400, 'Role must be Admin or Sales Executive');
+  if (!['superadmin', 'admin', 'sales'].includes(role)) throw httpErr(400, 'Role must be Super Admin, Admin or Sales Executive');
   if (!strong(password)) throw httpErr(400, 'Password must be 8+ characters with letters and numbers');
   if (await User.exists({ email: normEmail(email) })) throw httpErr(409, 'An account with this email already exists');
   const u = await User.create({
@@ -55,18 +62,22 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
     mustChangePassword: false
   });
   if (team) await moveUser(u, team, req.user);
-  await log(req.user, 'user.created', 'User', u._id, `Created ${role === 'admin' ? 'Admin' : 'Sales Executive'} account for ${u.name}`, { team: u.team });
+  await log(req.user, 'user.created', 'User', u._id, `Created ${role === 'superadmin' ? 'Super Admin' : role === 'admin' ? 'Admin' : 'Sales Executive'} account for ${u.name}`, { team: u.team });
   notify(u);
   res.status(201).json(await get(u._id));
 });
 
 r.put('/:id', requireRole('superadmin'), async (req, res) => {
-  const u = await target(req.params.id); const b = req.body; const changes = [];
+  const u = await target(req.params.id, req.user); const b = req.body; const changes = [];
   if (b.email && normEmail(b.email) !== u.email) { if (await User.exists({ email: normEmail(b.email), _id: { $ne: u._id } })) throw httpErr(409, 'Email already in use'); changes.push({ field: 'email', from: u.email, to: normEmail(b.email) }); u.email = b.email; }
   if (b.name && b.name !== u.name) { changes.push({ field: 'name', from: u.name, to: b.name }); u.name = b.name; }
   if (b.phone !== undefined) u.phone = b.phone || null;
   if (b.role && b.role !== u.role) {
-    if (!['admin', 'sales'].includes(b.role)) throw httpErr(400, 'Invalid role');
+    if (u.role === 'superadmin') {
+      const superCount = await User.countDocuments({ role: 'superadmin', active: true });
+      if (superCount <= 1) throw httpErr(400, 'Cannot change role of the sole Super Admin');
+    }
+    if (!['superadmin', 'admin', 'sales'].includes(b.role)) throw httpErr(400, 'Invalid role');
     await moveUser(u, null, req.user);           // leave old team before the role changes
     changes.push({ field: 'role', from: u.role, to: b.role }); u.role = b.role; u.tokenVersion += 1;
   }
@@ -88,7 +99,8 @@ r.put('/:id', requireRole('superadmin'), async (req, res) => {
 });
 
 r.post('/:id/toggle', requireRole('superadmin'), async (req, res) => {
-  const u = await target(req.params.id);
+  const u = await target(req.params.id, req.user);
+  if (String(u._id) === String(req.user._id)) throw httpErr(400, 'Cannot deactivate your own account');
   u.active = !u.active; u.tokenVersion += 1; await u.save();
   if (!u.active) await syncUser(u._id, { kick: true });
   await log(req.user, u.active ? 'user.activated' : 'user.deactivated', 'User', u._id, `${u.active ? 'Activated' : 'Deactivated'} account of ${u.name}`, { team: u.team });
@@ -97,7 +109,7 @@ r.post('/:id/toggle', requireRole('superadmin'), async (req, res) => {
 });
 
 r.post('/:id/reset-password', requireRole('superadmin'), async (req, res) => {
-  const u = await target(req.params.id);
+  const u = await target(req.params.id, req.user);
   if (!strong(req.body.password)) throw httpErr(400, 'Password must be 8+ characters with letters and numbers');
   u.passwordHash = await bcrypt.hash(req.body.password, 12);
   u.plainPassword = req.body.password;
@@ -110,7 +122,8 @@ r.post('/:id/reset-password', requireRole('superadmin'), async (req, res) => {
   res.json({ ok: true });
 });
 r.delete('/:id', requireRole('superadmin'), async (req, res) => {
-  const u = await target(req.params.id);
+  const u = await target(req.params.id, req.user);
+  if (u.role === 'superadmin') throw httpErr(403, 'Super Admin accounts cannot be deleted');
   if (String(u._id) === String(req.user._id)) throw httpErr(400, 'Cannot delete your own account');
   await moveUser(u, null, req.user);
   await Team.updateMany({ admin: u._id }, { $set: { admin: null } });

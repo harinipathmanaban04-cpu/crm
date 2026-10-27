@@ -11,9 +11,8 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         configure: (proxy) => {
-          // Remove default proxy error spam
-          proxy.removeAllListeners('error');
           proxy.on('error', (err, req, res) => {
+            console.error('[vite proxy] backend unreachable:', err.code || err.message);
             if (res && !res.headersSent && typeof res.writeHead === 'function') {
               res.writeHead(503, { 'Content-Type': 'application/json' });
               res.end(
@@ -21,6 +20,8 @@ export default defineConfig({
                   message: 'Backend server is not running or restarting on port 5000. Please start the server.',
                 })
               );
+            } else if (res && typeof res.destroy === 'function') {
+              res.destroy();
             }
           });
         },

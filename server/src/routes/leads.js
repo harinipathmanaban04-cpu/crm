@@ -1,9 +1,9 @@
-import { Lead, User, Team, Customer, nextSeq, LEAD_STATUSES } from '../models.js';
+import { Lead, User, Team, Customer, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
 import { crud } from './crud.js';
 import { requireRole } from '../middleware.js';
 import { scopeFor } from '../scope.js';
 import { pick, diff, httpErr, endOfToday } from '../util.js';
-import { emit } from '../realtime.js';
+import { emit, emitRooms } from '../realtime.js';
 import { log } from '../services/activity.js';
 import { assertUnique } from '../services/customer.js';
 
@@ -68,6 +68,22 @@ router.post('/:id/assign', requireRole('superadmin', 'admin'), async (req, res) 
   await lead.save();
   await log(req.user, 'lead.assigned', 'Lead', lead._id, `${prev ? 'Reassigned' : 'Assigned'} lead ${lead.name}`, { team: lead.team });
   emit('lead:assigned', lead, [prev]); emit('lead:updated', lead, [prev]);
+
+  // Create notification for the assigned sales executive (only sales, never superadmin)
+  if (a.assignedTo && String(a.assignedTo) !== String(req.user._id)) {
+    const se = await User.findById(a.assignedTo);
+    if (se && se.role === 'sales') {
+      const notif = await Notification.create({
+        recipient: se._id,
+        type: 'lead_assigned',
+        title: 'New lead assigned to you',
+        message: `${req.user.name} has assigned lead "${lead.name}" to you`,
+        data: { leadId: String(lead._id), assignedBy: String(req.user._id) },
+      });
+      emitRooms('notification:new', [`user:${se._id}`], { id: String(notif._id), unread: 1 });
+    }
+  }
+
   res.json(await Lead.findById(lead._id).populate(POP));
 });
 
@@ -94,4 +110,104 @@ router.post('/:id/convert', async (req, res) => {
   emit('lead:updated', lead); emit('customer:created', c);
   res.json(await Lead.findById(lead._id).populate(POP));
 });
+
+// Bulk assign leads to an Admin (SuperAdmin only)
+router.post('/bulk-assign-admin', requireRole('superadmin'), async (req, res) => {
+  const { leadIds, adminId } = req.body;
+  if (!Array.isArray(leadIds) || !leadIds.length) throw httpErr(400, 'Select at least one lead');
+  if (!adminId) throw httpErr(400, 'Select an Admin to assign to');
+
+  const admin = await User.findOne({ _id: adminId, role: 'admin', active: true });
+  if (!admin) throw httpErr(400, 'Invalid or inactive Admin account');
+
+  const leads = await Lead.find({ _id: { $in: leadIds } });
+  if (!leads.length) throw httpErr(404, 'No valid leads found');
+
+  let assigned = 0;
+  for (const lead of leads) {
+    const prev = lead.admin;
+    lead.admin = admin._id;
+    if (admin.team) lead.team = admin.team;
+    lead.history.push({
+      type: prev ? 'reassigned_admin' : 'assigned_admin',
+      from: prev,
+      to: admin._id,
+      team: admin.team,
+      by: req.user._id,
+    });
+    await lead.save();
+    emit('lead:assigned', lead);
+    emit('lead:updated', lead);
+    assigned++;
+  }
+
+  // Create notification for the admin (only admin, never superadmin)
+  if (admin && admin.role === 'admin') {
+    const notif = await Notification.create({
+      recipient: admin._id,
+      type: 'lead_assigned',
+      title: `${assigned} lead${assigned !== 1 ? 's' : ''} assigned to you`,
+      message: `${req.user.name} has assigned ${assigned} lead${assigned !== 1 ? 's' : ''} to you`,
+      data: { count: assigned, assignedBy: String(req.user._id) },
+    });
+    emitRooms('notification:new', [`user:${admin._id}`], { id: String(notif._id), unread: 1 });
+  }
+
+  await log(req.user, 'lead.bulk-assigned-admin', 'Lead', null, `Assigned ${assigned} leads to Admin ${admin.name}`, {});
+  res.json({ ok: true, assigned });
+});
+
+// Bulk assign leads to a Sales Executive (Admin or SuperAdmin)
+router.post('/bulk-assign-sales', requireRole('superadmin', 'admin'), async (req, res) => {
+  const { leadIds, salesId } = req.body;
+  if (!Array.isArray(leadIds) || !leadIds.length) throw httpErr(400, 'Select at least one lead');
+  if (!salesId) throw httpErr(400, 'Select a Sales Executive');
+
+  const se = await User.findOne({ _id: salesId, role: 'sales', active: true });
+  if (!se) throw httpErr(400, 'Invalid or inactive Sales Executive');
+
+  // Admin can only assign to their own team's Sales Execs
+  if (req.user.role === 'admin' && req.user.team && String(se.team) !== String(req.user.team)) {
+    throw httpErr(403, 'You can only assign to Sales Executives in your team');
+  }
+
+  // Find leads in scope
+  const scopeFilter = scopeFor(req.user, 'lead');
+  const leads = await Lead.find({ _id: { $in: leadIds }, ...scopeFilter });
+  if (!leads.length) throw httpErr(404, 'No leads found in your scope');
+
+  let assigned = 0;
+  for (const lead of leads) {
+    const prev = lead.assignedTo;
+    lead.assignedTo = se._id;
+    if (se.team) lead.team = se.team;
+    lead.history.push({
+      type: prev ? 'reassigned' : 'assigned',
+      from: prev,
+      to: se._id,
+      team: se.team,
+      by: req.user._id,
+    });
+    await lead.save();
+    emit('lead:assigned', lead, [prev]);
+    emit('lead:updated', lead, [prev]);
+    assigned++;
+  }
+
+  // Create notification for the sales exec (only sales executive, never superadmin)
+  if (se && se.role === 'sales') {
+    const notif = await Notification.create({
+      recipient: se._id,
+      type: 'lead_assigned',
+      title: `${assigned} lead${assigned !== 1 ? 's' : ''} assigned to you`,
+      message: `${req.user.name} has assigned ${assigned} lead${assigned !== 1 ? 's' : ''} to you`,
+      data: { count: assigned, assignedBy: String(req.user._id) },
+    });
+    emitRooms('notification:new', [`user:${se._id}`], { id: String(notif._id), unread: 1 });
+  }
+
+  await log(req.user, 'lead.bulk-assigned-sales', 'Lead', null, `Assigned ${assigned} leads to Sales Executive ${se.name}`, {});
+  res.json({ ok: true, assigned });
+});
+
 export default router;

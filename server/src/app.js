@@ -18,11 +18,14 @@ import authRoutes from './routes/auth.js';
 import users from './routes/users.js';
 import teams from './routes/teams.js';
 import leads from './routes/leads.js';
+import leadImport from './routes/leadImport.js';
 import tasks from './routes/tasks.js';
 import customers from './routes/customers.js';
 import finance from './routes/finance.js';
+import { exchangeCode as exchangeGmailCode } from './services/gmail.js';
 import insights from './routes/insights.js';
 import mobile from './routes/mobile.js';
+import notifications from './routes/notifications.js';
 
 const app = express();
 
@@ -91,12 +94,25 @@ const api = express.Router();
 api.use(auth());
 api.use('/users', users);
 api.use('/teams', teams);
+api.use('/leads/import', leadImport);
 api.use('/leads', leads);
 api.use('/tasks', tasks);
 api.use('/customers', customers);
 api.use('/mobile', mobile);
+api.use('/notifications', notifications);
 api.use('/', finance);
 api.use('/', insights);
+
+// Public Gmail OAuth callback
+app.get('/api/gmail/callback', async (req, res) => {
+  try {
+    await exchangeGmailCode(req.query.code);
+    const clientUrl = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim();
+    res.redirect(clientUrl + '/invoices?gmail=connected');
+  } catch (e) {
+    res.status(400).send(e.message || 'Gmail connection failed');
+  }
+});
 
 app.use('/api', api);
 

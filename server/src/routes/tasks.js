@@ -7,22 +7,42 @@ import { log } from '../services/activity.js';
 const POP = [{ path: 'assignee', select: 'name email' }, { path: 'createdBy', select: 'name' }, { path: 'lead', select: 'name leadId' }, { path: 'customer', select: 'name' }, { path: 'team', select: 'name' }];
 const FIELDS = ['title', 'description', 'priority', 'dueDate', 'status', 'lead', 'customer'];
 async function resolveAssignee(user, id) {
-  const a = await User.findOne({ _id: id, role: 'sales', active: true });
-  if (!a) throw httpErr(400, 'Select a valid Sales Executive');
-  if (user.role === 'admin' && String(a.team) !== String(user.team)) throw httpErr(403, 'You can only assign tasks within your team');
+  const targetId = id || user._id;
+  const a = await User.findOne({ _id: targetId, active: true });
+  if (!a) throw httpErr(400, 'Select a valid Assignee');
+  if (user.role === 'admin' && user.team && a.team && String(a.team) !== String(user.team)) {
+    throw httpErr(403, 'You can only assign tasks within your team');
+  }
   return a;
 }
 export default crud({
   Model: Task, kind: 'task', populate: POP, search: ['title', 'description'], filters: ['status', 'priority', 'assignee', 'team'], dateField: 'dueDate',
   extra: (req) => [req.query.overdue === '1' && { status: { $in: ['To Do', 'In Progress'] }, dueDate: { $lt: new Date() } }],
   sort: 'dueDate',
-  create: { roles: ['superadmin', 'admin'], build: async (req) => { const a = await resolveAssignee(req.user, req.body.assignee); return { ...pick(req.body, FIELDS), assignee: a._id, team: a.team, createdBy: req.user._id }; } },
+  create: {
+    roles: ['superadmin', 'admin', 'sales'],
+    build: async (req) => {
+      const a = await resolveAssignee(req.user, req.body.assignee);
+      return {
+        ...pick(req.body, FIELDS),
+        assignee: a._id,
+        team: a.team || req.user.team,
+        createdBy: req.user._id,
+      };
+    },
+  },
   update: {
+    roles: ['superadmin', 'admin', 'sales'],
     apply: async (req, doc) => {
-      if (req.user.role === 'sales') { Object.assign(doc, pick(req.body, ['status'])); }
-      else {
+      if (req.user.role === 'sales') {
+        Object.assign(doc, pick(req.body, ['status', 'title', 'description', 'priority', 'dueDate']));
+      } else {
         Object.assign(doc, pick(req.body, FIELDS));
-        if (req.body.assignee && String(req.body.assignee) !== String(doc.assignee)) { const a = await resolveAssignee(req.user, req.body.assignee); doc.assignee = a._id; doc.team = a.team; }
+        if (req.body.assignee && String(req.body.assignee) !== String(doc.assignee)) {
+          const a = await resolveAssignee(req.user, req.body.assignee);
+          doc.assignee = a._id;
+          doc.team = a.team;
+        }
       }
       doc.completedAt = doc.status === 'Completed' ? doc.completedAt || new Date() : null;
     },
