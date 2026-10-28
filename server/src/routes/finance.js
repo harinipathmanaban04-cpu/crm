@@ -607,6 +607,7 @@ R.post('/invoices/:id/send-email', async (req, res) => {
     emit('payment:updated', inv);
     res.json({ ok: true, messageId: result.messageId, recipient, provider: result.provider });
   } catch (e) {
+    console.error('Invoice email send failed:', e);
     inv.emailStatus = 'Failed';
     inv.emailError = e.message;
     inv.emailRecipient = recipient;

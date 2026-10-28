@@ -114,6 +114,7 @@ async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
       data?.error?.message ||
       data?.name ||
       `Resend API request failed with status ${res.status}`;
+    console.error('Resend email send failed:', res.status, message);
     throw new Error(message);
   }
 
