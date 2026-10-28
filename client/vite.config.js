@@ -28,12 +28,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: process.env.VITE_BACKEND_URL || `http://127.0.0.1:${process.env.PORT || 5001}`,
+        target: process.env.VITE_BACKEND_URL || `http://127.0.0.1:${process.env.VITE_BACKEND_PORT || process.env.PORT || 5000}`,
         changeOrigin: true,
         secure: false,
         configure: (proxy) => {
           proxy.on('error', (err, req, res) => {
-            const targetPort = process.env.PORT || 5001;
+            const targetPort = process.env.VITE_BACKEND_PORT || process.env.PORT || 5000;
             console.error(`[vite proxy] backend unreachable on port ${targetPort}:`, err.code || err.message);
             if (res && !res.headersSent && typeof res.writeHead === 'function') {
               res.writeHead(503, { 'Content-Type': 'application/json' });

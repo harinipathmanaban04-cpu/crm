@@ -30,32 +30,20 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
 const server = http.createServer(app);
 initSocket(server, allowedOrigins);
 
-const defaultPort = Number(process.env.PORT) || 5001;
+const defaultPort = Number(process.env.PORT) || 5000;
 
-function listenWithFallback(port, remainingAttempts = 5) {
-  const onError = (err) => {
-    if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
-      if (remainingAttempts > 0) {
-        console.warn(`⚠️ Port ${port} is unavailable (${err.code}). Trying port ${port + 1}...`);
-        listenWithFallback(port + 1, remainingAttempts - 1);
-      } else {
-        console.error(`❌ Ports ${defaultPort}-${port} are unavailable. Set a free PORT in server/.env.`);
-        process.exit(1);
-      }
-    } else {
-      console.error('❌ HTTP server error:', err);
-      process.exit(1);
-    }
-  };
+server.on('error', (err) => {
+  if (err && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
+    console.error(`❌ Port ${defaultPort} is unavailable (${err.code}). Stop the process using it or set a free PORT in server/.env, then restart.`);
+  } else {
+    console.error('❌ HTTP server error:', err);
+  }
+  process.exit(1);
+});
 
-  server.once('error', onError);
-  server.listen(port, '0.0.0.0', () => {
-    server.removeListener('error', onError);
-    console.log(`✅ API + Socket.IO running on http://localhost:${port}`);
-  });
-}
-
-listenWithFallback(defaultPort);
+server.listen(defaultPort, '0.0.0.0', () => {
+  console.log(`✅ API + Socket.IO running on http://localhost:${defaultPort}`);
+});
 
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled promise rejection:', reason);

@@ -1,9 +1,25 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const isWin = process.platform === 'win32';
 const npmCmd = isWin ? 'npm.cmd' : 'npm';
-const port = process.env.PORT || 5001;
+
+function readServerEnvPort() {
+  try {
+    const content = fs.readFileSync(path.join(__dirname, 'server', '.env'), 'utf8');
+    const match = content.match(/^PORT\s*=\s*(.+)$/m);
+    if (match) {
+      const parsed = Number(String(match[1]).trim());
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  } catch (_) {
+    // Fall back to default if server/.env is missing or unreadable
+  }
+  return null;
+}
+
+const port = Number(process.env.PORT) || readServerEnvPort() || 5000;
 
 console.log('\x1b[36m%s\x1b[0m', `⚡ Starting Eco CRM: Server (port ${port}) + Client (port 5173)...`);
 
