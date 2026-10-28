@@ -20,6 +20,12 @@ export function isSmtpAvailable() {
   return isSmtpConfigured();
 }
 
+export function isBrevoConfigured() {
+  const apiKey = (process.env.BREVO_API_KEY || '').trim();
+  const senderEmail = (process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || '').trim();
+  return Boolean(apiKey && senderEmail);
+}
+
 export function isResendConfigured() {
   return Boolean((process.env.RESEND_API_KEY || '').trim());
 }
@@ -48,7 +54,7 @@ export async function verifySmtpConnection() {
   }
 }
 export function isEmailConfigured() {
-  return isResendConfigured() || isSmtpAvailable() || isGmailConfigured();
+  return isBrevoConfigured() || isResendConfigured() || isSmtpAvailable() || isGmailConfigured();
 }
 
 function getSmtpTransporter() {
@@ -84,14 +90,67 @@ function getSmtpTransporter() {
 
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
-export async function sendInvoiceMail({ to, subject, text, html, pdfBuffer, filename }) {
-  if (!to || typeof to !== 'string' || !EMAIL_REGEX.test(to.trim())) {
-    throw new Error(`Invalid recipient email address "${to || ''}". Please provide a valid email (e.g. name@gmail.com).`);
+async function sendViaBrevo({ to, subject, text, html, pdfBuffer, filename }) {
+  const apiKey = (process.env.BREVO_API_KEY || '').trim();
+  const senderEmail = (process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || '').trim();
+  const senderName = (process.env.BREVO_SENDER_NAME || 'Eco Friendly Tech Solutions').trim();
+
+  if (!apiKey) throw new Error('Brevo is not configured (missing BREVO_API_KEY).');
+  if (!senderEmail) throw new Error('Brevo is not configured (missing BREVO_SENDER_EMAIL).');
+  if (!pdfBuffer || !Buffer.isBuffer(pdfBuffer) || pdfBuffer.length === 0) {
+    throw new Error('PDF attachment buffer is empty or corrupt. Could not send email.');
   }
 
-  const cleanTo = to.trim().toLowerCase();
+  const attachmentName = filename || 'Invoice.pdf';
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-  // Validate PDF attachment buffer
+  try {
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        sender: { name: senderName, email: senderEmail },
+        to: [{ email: to }],
+        subject,
+        textContent: text,
+        htmlContent: html || text.replace(/\n/g, '<br/>'),
+        attachment: [
+          {
+            content: pdfBuffer.toString('base64'),
+            name: attachmentName,
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+
+    let data = {};
+    try { data = await res.json(); } catch { data = {}; }
+
+    if (!res.ok) {
+      const message =
+        data?.message ||
+        data?.error ||
+        `Brevo API request failed with status ${res.status}`;
+      console.error('Brevo email send failed:', { status: res.status, message });
+      throw new Error(message);
+    }
+
+    return { ok: true, messageId: data?.messageId || null, provider: 'brevo' };
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error('Brevo API request timed out.');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
   const apiKey = (process.env.RESEND_API_KEY || '').trim();
@@ -142,12 +201,25 @@ async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
   return { ok: true, messageId: data?.id || data?.messageId || null, provider: 'resend' };
 }
 
+export async function sendInvoiceMail({ to, subject, text, html, pdfBuffer, filename }) {
+  if (!to || typeof to !== 'string' || !EMAIL_REGEX.test(to.trim())) {
+    throw new Error(`Invalid recipient email address "${to || ''}". Please provide a valid email (e.g. name@gmail.com).`);
+  }
+
+  const cleanTo = to.trim().toLowerCase();
+
+  // Validate PDF attachment buffer
 
   if (!pdfBuffer || !Buffer.isBuffer(pdfBuffer) || pdfBuffer.length === 0) {
     throw new Error('PDF attachment buffer is empty or corrupt. Could not send email.');
   }
 
-  // 1. Use SMTP (Gmail SMTP) when configured
+  // 1. Use Brevo HTTPS API when configured
+  if (isBrevoConfigured()) {
+    return await sendViaBrevo({ to: cleanTo, subject, text, html, pdfBuffer, filename: filename || 'Invoice.pdf' });
+  }
+
+  // 2. Use SMTP (Gmail SMTP) when configured
   if (isSmtpAvailable()) {
     const transporter = getSmtpTransporter();
     const smtpHost = (process.env.SMTP_HOST || '').toLowerCase();
@@ -235,6 +307,6 @@ let info;
 
   // 4. Graceful error explaining missing configuration
   throw new Error(
-    'Email service is not configured. Please set SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or configure Gmail OAuth in server environment.'
+    'Email service is not configured. Please set Brevo API credentials (BREVO_API_KEY, BREVO_SENDER_EMAIL) for production or SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) for local development.'
   );
 }

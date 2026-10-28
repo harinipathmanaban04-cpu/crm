@@ -535,9 +535,9 @@ R.post('/invoices/:id/send-email', async (req, res) => {
 
   if (!isEmailConfigured()) {
     inv.emailStatus = 'Failed';
-    inv.emailError = 'Email service not configured. Configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or Gmail OAuth.';
+    inv.emailError = 'Email service is not configured. Configure Brevo API credentials (BREVO_API_KEY, BREVO_SENDER_EMAIL) or SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or Gmail OAuth.';
     await inv.save().catch(() => {});
-    throw httpErr(503, 'Email service is not configured. Please configure SMTP credentials or Gmail OAuth.');
+    throw httpErr(503, 'Email service is not configured. Please configure Brevo API credentials or SMTP credentials or Gmail OAuth.');
   }
 
   const recipient = (req.body?.recipient || inv.customerEmail || inv.customer?.email || inv.emailRecipient || '').trim().toLowerCase();
