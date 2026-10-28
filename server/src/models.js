@@ -17,12 +17,52 @@ export const PAYMENT_PLANS = ['One-Time Payment', 'Monthly EMI', 'Custom Install
 
 const hide = { toJSON: { transform: (d, r) => { delete r.passwordHash; delete r.tokenVersion; delete r.__v; return r; } } };
 
-const Counter = model('Counter', new Schema({ _id: String, seq: { type: Number, default: 0 } }));
+export const Counter = model('Counter', new Schema({ _id: String, seq: { type: Number, default: 0 } }));
 export const nextSeq = async (k) => (await Counter.findByIdAndUpdate(k, { $inc: { seq: 1 } }, { new: true, upsert: true })).seq;
+
 export const nextInvoiceNo = async () => {
   const year = new Date().getFullYear();
-  const seq = await nextSeq(`inv_${year}`);
-  return `EFTS-INV-${year}-${String(seq).padStart(3, '0')}`;
+  const prefix = `EFTS-INV-${year}-`;
+  const InvoiceModel = mongoose.models.Invoice;
+
+  // 1. Scan existing database records to find the true highest sequence number for this year
+  let maxDbSeq = 0;
+  if (InvoiceModel) {
+    try {
+      const existingInvoices = await InvoiceModel.find(
+        { invoiceNo: new RegExp(`^${prefix}\\d+$`) },
+        { invoiceNo: 1 }
+      ).lean();
+
+      for (const inv of existingInvoices) {
+        const m = inv.invoiceNo?.match(new RegExp(`^${prefix}(\\d+)$`));
+        if (m && m[1]) {
+          const num = parseInt(m[1], 10);
+          if (num > maxDbSeq) maxDbSeq = num;
+        }
+      }
+    } catch (e) {
+      console.warn('Error querying existing invoices for numbering:', e.message);
+    }
+  }
+
+  // 2. Ensure Counter document is synchronized with existing invoices in MongoDB
+  const counterDoc = await Counter.findById(`inv_${year}`);
+  const currentCounter = counterDoc?.seq || 0;
+  if (currentCounter < maxDbSeq) {
+    await Counter.findByIdAndUpdate(`inv_${year}`, { $set: { seq: maxDbSeq } }, { upsert: true });
+  }
+
+  // 3. Increment and ensure the generated invoice number does not collide with any existing record
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const seq = await nextSeq(`inv_${year}`);
+    const candidate = `${prefix}${String(seq).padStart(3, '0')}`;
+    if (!InvoiceModel) return candidate;
+    const exists = await InvoiceModel.exists({ invoiceNo: candidate });
+    if (!exists) return candidate;
+  }
+
+  return `${prefix}${Date.now().toString().slice(-6)}`;
 };
 
 export const User = model('User', new Schema({

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import { Course, Admission, Invoice, Payment, Customer, nextSeq, nextInvoiceNo } from '../models.js';
 import { crud } from './crud.js';
 import { scopeFor } from '../scope.js';
@@ -8,10 +9,12 @@ import { emit } from '../realtime.js';
 import { log } from '../services/activity.js';
 import { sendInvoiceMail, isEmailConfigured } from '../services/mailer.js';
 import { isGmailConfigured, getAuthUrl, exchangeCode } from '../services/gmail.js';
-import { generateInvoicePdf } from '../services/invoicePdf.js';
+import { generateInvoicePdf, invalidateInvoicePdfCache } from '../services/invoicePdf.js';
 
 const R = Router();
 const SUPER = ['superadmin'], STAFF = ['superadmin', 'admin'], ALL_ROLES = ['superadmin', 'admin', 'sales'];
+
+const isValidObjectId = (id) => id && mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
 
 /* ---------- Courses ---------- */
 R.use('/courses', crud({
@@ -132,15 +135,40 @@ const IPOP = [
 /* 1. Preview Next Sequential Invoice Number */
 R.get('/invoices/next-number', async (req, res) => {
   const year = new Date().getFullYear();
+  const prefix = `EFTS-INV-${year}-`;
+
+  let maxDbSeq = 0;
+  try {
+    const existing = await Invoice.find(
+      { invoiceNo: new RegExp(`^${prefix}\\d+$`) },
+      { invoiceNo: 1 }
+    ).lean();
+
+    for (const item of existing) {
+      const m = item.invoiceNo?.match(new RegExp(`^${prefix}(\\d+)$`));
+      if (m && m[1]) {
+        const num = parseInt(m[1], 10);
+        if (num > maxDbSeq) maxDbSeq = num;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to query existing invoice numbers:', e.message);
+  }
+
   const Counter = Invoice.db.model('Counter');
   const counterDoc = await Counter.findById(`inv_${year}`);
-  const nextSeqNum = (counterDoc?.seq || 0) + 1;
-  const invoiceNo = `EFTS-INV-${year}-${String(nextSeqNum).padStart(3, '0')}`;
-  res.json({ invoiceNo, year, nextSeq: nextSeqNum });
+  const counterSeq = counterDoc?.seq || 0;
+  const safeSeq = Math.max(counterSeq, maxDbSeq) + 1;
+  const invoiceNo = `${prefix}${String(safeSeq).padStart(3, '0')}`;
+  res.json({ invoiceNo, year, nextSeq: safeSeq });
 });
 
 /* 2. Customer Autofill helper */
 R.get('/invoices/customer-info/:customerId', async (req, res) => {
+  if (!isValidObjectId(req.params.customerId)) {
+    throw httpErr(400, 'Invalid customer ID');
+  }
+
   const c = await Customer.findOne({ $and: [{ _id: req.params.customerId }, scopeFor(req.user, 'customer')] }).populate('course');
   if (!c) throw httpErr(404, 'Customer not found');
 
@@ -181,29 +209,46 @@ R.get('/invoices/customer-info/:customerId', async (req, res) => {
 
 /* 3. Upgraded Invoice Creation */
 R.post('/invoices', requireRole(...ALL_ROLES), async (req, res) => {
+  const customerName = (req.body.customerName || '').trim();
+  if (!customerName) {
+    throw httpErr(400, 'Customer / Student name is required');
+  }
+
+  // Safe Customer lookup
   let customerDoc = null;
-  if (req.body.customer) {
-    customerDoc = await Customer.findOne({ $and: [{ _id: req.body.customer }, scopeFor(req.user, 'customer')] });
+  const customerId = isValidObjectId(req.body.customer) ? req.body.customer : null;
+  if (customerId) {
+    customerDoc = await Customer.findOne({ $and: [{ _id: customerId }, scopeFor(req.user, 'customer')] });
     if (!customerDoc && req.user.role !== 'sales') {
-      customerDoc = await Customer.findById(req.body.customer);
+      customerDoc = await Customer.findById(customerId);
     }
   }
 
-  const customerName = req.body.customerName || customerDoc?.name || 'Customer';
-  const customerEmail = req.body.customerEmail || customerDoc?.email || '';
-  const customerPhone = req.body.customerPhone || customerDoc?.phone || '';
-
-  // Calculate dynamic invoice number if not already unique
-  let invoiceNo = req.body.invoiceNo?.trim();
-  if (!invoiceNo || invoiceNo.includes('—') || (await Invoice.exists({ invoiceNo }))) {
-    invoiceNo = await nextInvoiceNo();
-  }
+  const customerEmail = (req.body.customerEmail || customerDoc?.email || '').trim().toLowerCase();
+  const customerPhone = (req.body.customerPhone || customerDoc?.phone || '').trim();
 
   const mode = req.body.mode === 'Offline' ? 'Offline' : 'Online';
   const totalInternshipFee = req.body.totalInternshipFee != null ? Number(req.body.totalInternshipFee) : (mode === 'Offline' ? 30000 : 20000);
-  const total = req.body.total != null ? Number(req.body.total) : (req.body.registrationFee != null ? Number(req.body.registrationFee) : totalInternshipFee);
+  const total = Number(req.body.total != null ? req.body.total : (req.body.registrationFee != null ? req.body.registrationFee : totalInternshipFee)) || 0;
+
+  if (total <= 0) {
+    throw httpErr(400, 'Total invoice amount must be greater than zero');
+  }
+
+  // Rapid double-submission deduplication (within 4 seconds)
+  const windowStart = new Date(Date.now() - 4000);
+  const recentDuplicate = await Invoice.findOne({
+    createdBy: req.user._id,
+    customerName,
+    total,
+    createdAt: { $gte: windowStart },
+  }).populate(IPOP);
+  if (recentDuplicate) {
+    return res.status(200).json(recentDuplicate);
+  }
 
   // Process payment rows if submitted
+  const VALID_METHODS = ['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other', 'Cheque', 'Online'];
   const rawRows = Array.isArray(req.body.paymentRows) ? req.body.paymentRows : [];
   let calculatedPaid = 0;
   const sanitizedRows = [];
@@ -213,20 +258,20 @@ R.post('/invoices', requireRole(...ALL_ROLES), async (req, res) => {
     if (amt > 0) {
       const isSuccess = r.status === 'Success' || r.status === 'Paid';
       if (isSuccess) calculatedPaid += amt;
+      const cleanMode = VALID_METHODS.includes(r.mode) ? r.mode : (VALID_METHODS.includes(req.body.paymentMode) ? req.body.paymentMode : 'UPI');
       sanitizedRows.push({
         sNo: r.sNo || idx + 1,
-        description: r.description || `${req.body.programName || 'Internship'} – EMI ${r.emiNumber || (idx + 1)} - ${r.mode || req.body.paymentMode || 'UPI'}`,
+        description: (r.description || `${req.body.programName || 'Internship'} – EMI ${r.emiNumber || (idx + 1)} - ${cleanMode}`).replace(/\?/g, '–'),
         date: r.date ? new Date(r.date) : new Date(),
         emiNumber: String(r.emiNumber || (idx + 1)),
-        mode: r.mode || req.body.paymentMode || 'UPI',
+        mode: cleanMode,
         amount: amt,
-        status: isSuccess ? 'Paid' : (r.status || 'Success'),
+        status: isSuccess ? 'Paid' : (r.status || 'Pending'),
         txnRef: r.txnRef || '',
       });
     }
   });
 
-  // Received amount check: never allow received to exceed total without advance-payment workflow
   const paid = calculatedPaid > 0 ? calculatedPaid : (Number(req.body.paid) || 0);
   if (paid > total && !req.body.allowAdvance) {
     throw httpErr(400, `Received amount (₹${paid}) cannot exceed total invoice amount (₹${total})`);
@@ -245,65 +290,95 @@ R.post('/invoices', requireRole(...ALL_ROLES), async (req, res) => {
   }
 
   const amountInWords = req.body.amountInWords || amountToIndianWords(total);
+  const courseId = isValidObjectId(req.body.course) ? req.body.course : (customerDoc?.course || undefined);
+  const admissionId = isValidObjectId(req.body.admission) ? req.body.admission : undefined;
 
-  const inv = await Invoice.create({
-    invoiceNo,
-    invoiceDate: req.body.invoiceDate ? new Date(req.body.invoiceDate) : new Date(),
-    customer: customerDoc?._id || (req.body.customer ? req.body.customer : undefined),
-    customerName,
-    customerEmail,
-    customerPhone,
-    course: req.body.course || customerDoc?.course || undefined,
-    programName: req.body.programName || '',
-    admission: req.body.admission || undefined,
-    mode,
-    invoiceType: req.body.invoiceType || 'Payment',
-    description: req.body.description || `${req.body.programName || 'Internship Program'} – ${req.body.paymentMode || 'UPI'}`,
-    paymentMode: req.body.paymentMode || 'UPI',
-    paymentPlan: req.body.paymentPlan || 'One-Time Payment',
-    totalInstallments: Number(req.body.totalInstallments) || 1,
-    currentInstallment: Number(req.body.currentInstallment) || 1,
-    installmentAmount: Number(req.body.installmentAmount) || 0,
-    registrationFee: Number(req.body.registrationFee) || 0,
-    totalInternshipFee,
-    total,
-    paid,
-    balance,
-    amountInWords,
-    status,
-    dueDate,
-    paymentDate: req.body.paymentDate ? new Date(req.body.paymentDate) : (sanitizedRows[0]?.date || new Date()),
-    method: req.body.paymentMode || 'UPI',
-    txnRef: req.body.txnRef || sanitizedRows[0]?.txnRef || '',
-    notes: req.body.notes || '',
-    paymentRows: sanitizedRows,
-    owner: customerDoc?.owner || req.user._id,
-    team: customerDoc?.team || req.user.team,
-    createdBy: req.user._id,
-  });
+  // Calculate guaranteed unique invoice number and create document with retry on collision
+  let invoiceNo = req.body.invoiceNo?.trim();
+  if (!invoiceNo || invoiceNo.includes('—') || (await Invoice.exists({ invoiceNo }))) {
+    invoiceNo = await nextInvoiceNo();
+  }
 
-  // Save corresponding Payment records in MongoDB to ensure zero data duplication
+  let inv = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      inv = await Invoice.create({
+        invoiceNo,
+        invoiceDate: req.body.invoiceDate ? new Date(req.body.invoiceDate) : new Date(),
+        customer: customerDoc?._id || (customerId || undefined),
+        customerName,
+        customerEmail,
+        customerPhone,
+        course: courseId,
+        programName: req.body.programName || '',
+        admission: admissionId,
+        mode,
+        invoiceType: req.body.invoiceType || 'Payment',
+        description: (req.body.description || `${req.body.programName || 'Internship Program'} – ${req.body.paymentMode || 'UPI'}`).replace(/\?/g, '–'),
+        paymentMode: VALID_METHODS.includes(req.body.paymentMode) ? req.body.paymentMode : 'UPI',
+        paymentPlan: req.body.paymentPlan || 'One-Time Payment',
+        totalInstallments: Number(req.body.totalInstallments) || 1,
+        currentInstallment: Number(req.body.currentInstallment) || 1,
+        installmentAmount: Number(req.body.installmentAmount) || 0,
+        registrationFee: Number(req.body.registrationFee) || 0,
+        totalInternshipFee,
+        total,
+        paid,
+        balance,
+        amountInWords,
+        status,
+        dueDate,
+        paymentDate: req.body.paymentDate ? new Date(req.body.paymentDate) : (sanitizedRows[0]?.date || new Date()),
+        method: VALID_METHODS.includes(req.body.paymentMode) ? req.body.paymentMode : 'UPI',
+        txnRef: req.body.txnRef || sanitizedRows[0]?.txnRef || '',
+        notes: req.body.notes || '',
+        paymentRows: sanitizedRows,
+        owner: customerDoc?.owner || req.user._id,
+        team: customerDoc?.team || req.user.team,
+        createdBy: req.user._id,
+      });
+      break;
+    } catch (err) {
+      if (err.code === 11000 && err.keyPattern?.invoiceNo) {
+        console.warn(`[Invoice] Invoice number ${invoiceNo} already taken, retrying with fresh sequential number...`);
+        invoiceNo = await nextInvoiceNo();
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  if (!inv) {
+    throw httpErr(500, 'Failed to assign a unique invoice number. Please retry.');
+  }
+
+  // Save corresponding Payment records in MongoDB
   if (sanitizedRows.length > 0) {
     for (const row of inv.paymentRows) {
-      const pDoc = await Payment.create({
-        invoice: inv._id,
-        customer: inv.customer,
-        description: row.description,
-        amount: row.amount,
-        method: row.mode || inv.paymentMode || 'UPI',
-        emiNumber: row.emiNumber,
-        txnRef: row.txnRef,
-        paymentDate: row.date,
-        status: row.status === 'Paid' ? 'Success' : row.status,
-        owner: inv.owner,
-        team: inv.team,
-        recordedBy: req.user._id,
-      });
-      row.paymentId = pDoc._id;
+      try {
+        const pDoc = await Payment.create({
+          invoice: inv._id,
+          customer: inv.customer || null,
+          description: row.description,
+          amount: row.amount,
+          method: VALID_METHODS.includes(row.mode) ? row.mode : (inv.paymentMode || 'UPI'),
+          emiNumber: row.emiNumber,
+          txnRef: row.txnRef,
+          paymentDate: row.date,
+          status: row.status === 'Paid' ? 'Success' : row.status,
+          owner: inv.owner,
+          team: inv.team,
+          recordedBy: req.user._id,
+        });
+        row.paymentId = pDoc._id;
+      } catch (payErr) {
+        console.warn('Payment record creation notice:', payErr.message);
+      }
     }
     await inv.save();
   }
 
+  invalidateInvoicePdfCache(inv._id);
   await log(req.user, 'invoice.created', 'Invoice', inv._id, `Created invoice ${inv.invoiceNo} (₹${inv.total})`, { team: inv.team });
   emit('payment:updated', inv);
   res.status(201).json(await Invoice.findById(inv._id).populate(IPOP));
@@ -336,23 +411,25 @@ R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
   // Update payment rows if supplied
   if (Array.isArray(req.body.paymentRows)) {
     const updatedRows = [];
+    const VALID_METHODS = ['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other', 'Cheque', 'Online'];
     for (let idx = 0; idx < req.body.paymentRows.length; idx++) {
       const r = req.body.paymentRows[idx];
       const amt = Number(r.amount) || 0;
       if (amt > 0) {
         const isSuccess = r.status === 'Paid' || r.status === 'Success';
+        const cleanMode = VALID_METHODS.includes(r.mode) ? r.mode : (inv.paymentMode || 'UPI');
         let pId = r.paymentId;
         if (!pId) {
           const pDoc = await Payment.create({
             invoice: inv._id,
-            customer: inv.customer,
-            description: r.description || `${inv.programName} – EMI ${r.emiNumber || (idx + 1)} - ${r.mode || inv.paymentMode}`,
+            customer: inv.customer || null,
+            description: r.description || `${inv.programName} – EMI ${r.emiNumber || (idx + 1)} - ${cleanMode}`,
             amount: amt,
-            method: r.mode || inv.paymentMode,
+            method: cleanMode,
             emiNumber: String(r.emiNumber || (idx + 1)),
             txnRef: r.txnRef || '',
             paymentDate: r.date ? new Date(r.date) : new Date(),
-            status: isSuccess ? 'Success' : (r.status || 'Success'),
+            status: isSuccess ? 'Success' : (r.status || 'Pending'),
             owner: inv.owner,
             team: inv.team,
             recordedBy: req.user._id,
@@ -362,11 +439,11 @@ R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
           await Payment.findByIdAndUpdate(pId, {
             description: r.description,
             amount: amt,
-            method: r.mode || inv.paymentMode,
+            method: cleanMode,
             emiNumber: String(r.emiNumber || (idx + 1)),
             txnRef: r.txnRef || '',
             paymentDate: r.date ? new Date(r.date) : new Date(),
-            status: isSuccess ? 'Success' : (r.status || 'Success'),
+            status: isSuccess ? 'Success' : (r.status || 'Pending'),
           });
         }
         updatedRows.push({
@@ -374,9 +451,9 @@ R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
           description: r.description,
           date: r.date ? new Date(r.date) : new Date(),
           emiNumber: String(r.emiNumber || (idx + 1)),
-          mode: r.mode || inv.paymentMode,
+          mode: cleanMode,
           amount: amt,
-          status: isSuccess ? 'Paid' : (r.status || 'Success'),
+          status: isSuccess ? 'Paid' : (r.status || 'Pending'),
           txnRef: r.txnRef || '',
           paymentId: pId,
         });
@@ -387,6 +464,7 @@ R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
 
   await inv.save();
   await recompute(inv._id);
+  invalidateInvoicePdfCache(inv._id);
   await log(req.user, 'invoice.updated', 'Invoice', inv._id, `Updated invoice ${inv.invoiceNo}`, { team: inv.team });
   emit('payment:updated', inv);
   res.json(await Invoice.findById(inv._id).populate(IPOP));
@@ -434,31 +512,42 @@ R.get('/invoices/:id/pdf', async (req, res) => {
   const pdf = await generateInvoicePdf(inv);
   const inline = req.query.inline === 'true';
   const disposition = inline ? 'inline' : 'attachment';
+  const cleanFilename = `${(inv.invoiceNo || 'invoice').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
 
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `${disposition}; filename="${inv.invoiceNo || 'invoice'}.pdf"`);
+  res.setHeader('Content-Length', pdf.length);
+  res.setHeader('Content-Disposition', `${disposition}; filename="${cleanFilename}"`);
+  res.setHeader('Cache-Control', 'private, no-transform, max-age=180');
   res.send(pdf);
 });
 
 /* 6. Email Invoice to Customer with attached original PDF */
-const sendingLocks = new Set();
+const sendingLocks = new Map(); // invoiceId -> timestamp
 R.post('/invoices/:id/send-email', async (req, res) => {
   const inv = await Invoice.findOne({ $and: [{ _id: req.params.id }, scopeFor(req.user, 'invoice')] }).populate(IPOP);
   if (!inv) throw httpErr(404, 'Invoice not found');
-  if (sendingLocks.has(String(inv._id))) throw httpErr(409, 'Email send already in progress');
+
+  const now = Date.now();
+  const existingLockTime = sendingLocks.get(String(inv._id));
+  if (existingLockTime && (now - existingLockTime) < 45000) {
+    throw httpErr(409, 'An email send operation is already in progress for this invoice. Please wait.');
+  }
 
   if (!isEmailConfigured()) {
     inv.emailStatus = 'Failed';
-    inv.emailError = 'Email service not configured. Configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or Gmail in server/.env';
+    inv.emailError = 'Email service not configured. Configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env or Render environment.';
     await inv.save().catch(() => {});
-    throw httpErr(503, 'Email service is not configured. Please configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or connect Gmail in server/.env.');
+    throw httpErr(503, 'Email service is not configured. Please configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env.');
   }
 
-  sendingLocks.add(String(inv._id));
-  try {
-    const recipient = req.body?.recipient || inv.customerEmail || inv.customer?.email || inv.emailRecipient;
-    if (!recipient) throw httpErr(400, 'Customer email address is not available');
+  const recipient = (req.body?.recipient || inv.customerEmail || inv.customer?.email || inv.emailRecipient || '').trim().toLowerCase();
+  const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  if (!recipient || !EMAIL_REGEX.test(recipient)) {
+    throw httpErr(400, `Invalid recipient email address "${recipient}". Please provide a valid email (e.g. student@gmail.com).`);
+  }
 
+  sendingLocks.set(String(inv._id), now);
+  try {
     // Make sure payment rows are hydrated for PDF
     const pays = await Payment.find({ invoice: inv._id }).sort('paymentDate');
     if ((!inv.paymentRows || inv.paymentRows.length === 0) && pays.length > 0) {
@@ -485,12 +574,13 @@ R.post('/invoices/:id/send-email', async (req, res) => {
       subject,
       text,
       pdfBuffer: pdf,
-      filename: `${inv.invoiceNo}.pdf`,
+      filename: `${(inv.invoiceNo || 'invoice').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`,
     });
 
     inv.emailStatus = 'Sent';
     inv.emailSentAt = new Date();
     inv.emailRecipient = recipient;
+    if (!inv.customerEmail) inv.customerEmail = recipient;
     inv.emailMessageId = result.messageId;
     inv.emailError = null;
     inv.emailedBy = req.user._id;
@@ -502,8 +592,9 @@ R.post('/invoices/:id/send-email', async (req, res) => {
   } catch (e) {
     inv.emailStatus = 'Failed';
     inv.emailError = e.message;
+    inv.emailRecipient = recipient;
     await inv.save().catch(() => {});
-    throw e;
+    throw httpErr(500, `Failed to send email: ${e.message}`);
   } finally {
     sendingLocks.delete(String(inv._id));
   }

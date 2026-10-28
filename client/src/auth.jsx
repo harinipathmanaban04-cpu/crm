@@ -6,8 +6,19 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(!!localStorage.getItem('crm_token'));
   const reload = useCallback(async () => {
-    if (!localStorage.getItem('crm_token')) { setUser(null); setLoading(false); return; }
-    try { setUser((await api.get('/auth/me')).data); } catch { setUser(null); } finally { setLoading(false); }
+    if (!localStorage.getItem('crm_token')) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+    try {
+      const res = await api.get('/auth/me', { timeout: 6000 });
+      setUser(res.data);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
   useEffect(() => { reload(); }, [reload]);
   const login = async (email, password) => {

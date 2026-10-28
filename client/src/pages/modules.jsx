@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, FileSpreadsheet, Plus, Mail, Printer } from 'lucide-react';
+import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, FileSpreadsheet, Plus, Mail, Printer, Loader2 } from 'lucide-react';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { useLookups } from '../lookups.jsx';
@@ -753,16 +753,19 @@ export function InvoicesPage() {
   const [tab, setTab] = useState('Invoices');
   const [showNewInvoice, setShowNewInvoice] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [downloadingId, setDownloadingId] = useState(null);
   const nav = useNavigate();
 
   const handleDownloadPdf = async (e, invoiceId, invoiceNo) => {
     e.stopPropagation();
+    if (downloadingId) return;
+    setDownloadingId(invoiceId);
     try {
       const res = await api.get(`/invoices/${invoiceId}/pdf`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${invoiceNo || 'invoice'}.pdf`;
+      a.download = `${(invoiceNo || 'invoice').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -770,6 +773,8 @@ export function InvoicesPage() {
       toast('PDF downloaded');
     } catch (err) {
       toast(errMsg(err), 'error');
+    } finally {
+      setDownloadingId(null);
     }
   };
 
@@ -874,9 +879,14 @@ export function InvoicesPage() {
                 <button
                   className="icon-btn text-blue-600 hover:bg-blue-50"
                   title="Download PDF"
+                  disabled={downloadingId === r._id}
                   onClick={(e) => handleDownloadPdf(e, r._id, r.invoiceNo)}
                 >
-                  <Download className="h-4 w-4" />
+                  {downloadingId === r._id ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
                 </button>
               </div>
             )}

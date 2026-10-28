@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { Badge, Modal, Spinner, fmt, inr, toast, Confirm } from '../ui.jsx';
-import { Download, Printer, Mail, PlusCircle, ArrowLeft, CheckCircle, Clock, AlertCircle, Trash2 } from 'lucide-react';
+import { Download, Printer, Mail, PlusCircle, ArrowLeft, CheckCircle, Clock, AlertCircle, Trash2, Loader2 } from 'lucide-react';
 import { amountToIndianWords } from './NewInvoiceModal.jsx';
 import InvoiceHeaderDecoration from '../assets/invoiceHeaderSvg.jsx';
 import InvoiceFooterDecoration from '../assets/invoiceFooterSvg.jsx';
@@ -16,6 +16,8 @@ export default function InvoiceDetail() {
 
   const [inv, setInv] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [sending, setSending] = useState(false);
   const [emailOpen, setEmailOpen] = useState(false);
   const [email, setEmail] = useState({ recipient: '', subject: '', message: '' });
@@ -62,14 +64,16 @@ export default function InvoiceDetail() {
     load();
   }, [id]);
 
-  // Working Download PDF button
+  // Optimized Download PDF button with responsive state
   const downloadPdf = async () => {
+    if (downloading) return;
+    setDownloading(true);
     try {
       const res = await api.get(`/invoices/${id}/pdf`, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${inv?.invoiceNo || 'invoice'}.pdf`;
+      a.download = `${(inv?.invoiceNo || 'invoice').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -77,11 +81,15 @@ export default function InvoiceDetail() {
       toast('PDF downloaded successfully');
     } catch (e) {
       toast(errMsg(e), 'error');
+    } finally {
+      setDownloading(false);
     }
   };
 
-  // Working Print button
+  // Optimized Print button with responsive state
   const printInvoice = async () => {
+    if (printing) return;
+    setPrinting(true);
     try {
       // Open inline PDF in print-friendly viewer window
       const res = await api.get(`/invoices/${id}/pdf?inline=true`, { responseType: 'blob' });
@@ -95,19 +103,23 @@ export default function InvoiceDetail() {
       }
     } catch (e) {
       window.print();
+    } finally {
+      setPrinting(false);
     }
   };
 
-  // Working Email Invoice button
+  // Working Email Invoice button with honest reporting and recipient validation
   const sendEmail = async () => {
-    if (!email.recipient?.trim()) {
-      toast('Please enter a valid recipient email address', 'error');
+    const cleanTo = (email.recipient || '').trim().toLowerCase();
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!cleanTo || !emailRegex.test(cleanTo)) {
+      toast('Please enter a valid recipient email address (e.g. name@gmail.com)', 'error');
       return;
     }
     setSending(true);
     try {
       const res = await api.post(`/invoices/${id}/send-email`, {
-        recipient: email.recipient.trim(),
+        recipient: cleanTo,
         subject: email.subject,
         message: email.message,
       });
@@ -238,17 +250,21 @@ export default function InvoiceDetail() {
           <button
             className="btn btn-primary flex items-center gap-1.5"
             onClick={downloadPdf}
+            disabled={downloading}
             title="Download original invoice PDF"
           >
-            <Download className="h-4 w-4" /> Download PDF
+            {downloading ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Download className="h-4 w-4" />}
+            {downloading ? 'Downloading…' : 'Download PDF'}
           </button>
 
           <button
             className="btn btn-secondary flex items-center gap-1.5"
             onClick={printInvoice}
+            disabled={printing}
             title="Print invoice"
           >
-            <Printer className="h-4 w-4" /> Print
+            {printing ? <Loader2 className="h-4 w-4 animate-spin text-gray-700" /> : <Printer className="h-4 w-4" />}
+            {printing ? 'Preparing…' : 'Print'}
           </button>
 
           <button
@@ -527,9 +543,9 @@ export default function InvoiceDetail() {
                 type="button"
                 className="btn btn-primary flex items-center gap-1.5"
                 onClick={sendEmail}
-                disabled={sending || !email.recipient}
+                disabled={sending || !email.recipient?.trim()}
               >
-                {sending ? <Spinner /> : <Mail className="h-4 w-4" />}
+                {sending ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Mail className="h-4 w-4" />}
                 {sending ? 'Sending PDF…' : 'Send Invoice Email'}
               </button>
             </div>

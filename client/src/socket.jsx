@@ -12,7 +12,7 @@ export function SocketProvider({ children }) {
   const uid = user && !user.mustChangePassword ? user._id : null;
   useEffect(() => {
     if (!uid) return;
-    const socketTarget = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || (window.location.port === '5173' ? 'http://localhost:5000' : '/');
+    const socketTarget = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL || (window.location.port === '5173' ? (import.meta.env.VITE_BACKEND_PORT ? `http://localhost:${import.meta.env.VITE_BACKEND_PORT}` : 'http://localhost:5001') : '/');
     const s = io(socketTarget, { auth: { token: localStorage.getItem('crm_token') }, reconnection: true, reconnectionDelay: 1000, reconnectionDelayMax: 8000 });
     let first = true;
     s.on('connect', () => { setConnected(true); if (!first) setReconnects((n) => n + 1); first = false; });

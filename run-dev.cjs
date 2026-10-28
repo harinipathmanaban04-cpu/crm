@@ -3,8 +3,9 @@ const path = require('path');
 
 const isWin = process.platform === 'win32';
 const npmCmd = isWin ? 'npm.cmd' : 'npm';
+const port = process.env.PORT || 5001;
 
-console.log('\x1b[36m%s\x1b[0m', '⚡ Starting Eco CRM: Server (port 5000) + Client (port 5173)...');
+console.log('\x1b[36m%s\x1b[0m', `⚡ Starting Eco CRM: Server (port ${port}) + Client (port 5173)...`);
 
 let server = null;
 let client = null;
@@ -41,7 +42,7 @@ function startClient() {
 }
 
 async function waitForServer() {
-  const url = 'http://127.0.0.1:5000/api/health';
+  const url = `http://127.0.0.1:${port}/api/health`;
   for (let i = 0; i < 60; i++) {
     if (shuttingDown) return;
     try {

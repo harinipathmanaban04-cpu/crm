@@ -7,6 +7,52 @@ import { drawInvoiceHeaderDecoration, drawInvoiceFooterDecoration } from '../ass
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// Pre-load and cache static image buffers once into memory to eliminate repeated disk I/O
+let cachedLogoBuffer = null;
+let cachedWatermarkBuffer = null;
+
+try {
+  const logoPath = path.resolve(__dirname, '../assets/logo.png');
+  if (fs.existsSync(logoPath)) cachedLogoBuffer = fs.readFileSync(logoPath);
+} catch (e) {
+  console.warn('Failed to pre-cache logo image:', e.message);
+}
+
+try {
+  const watermarkPath = path.resolve(__dirname, '../assets/invoice-watermark.png');
+  if (fs.existsSync(watermarkPath)) cachedWatermarkBuffer = fs.readFileSync(watermarkPath);
+} catch (e) {
+  console.warn('Failed to pre-cache watermark image:', e.message);
+}
+
+// Pre-check system font availability once
+const calibriPath = 'C:/Windows/Fonts/calibri.ttf';
+const calibriBoldPath = 'C:/Windows/Fonts/calibrib.ttf';
+const calibriItalicPath = 'C:/Windows/Fonts/calibrii.ttf';
+let hasCalibri = false;
+let hasCalibriItalic = false;
+
+try {
+  hasCalibri = fs.existsSync(calibriPath) && fs.existsSync(calibriBoldPath);
+  hasCalibriItalic = hasCalibri && fs.existsSync(calibriItalicPath);
+} catch {
+  hasCalibri = false;
+}
+
+// In-memory PDF buffer cache (keyed by invoice version)
+const pdfCache = new Map();
+const MAX_CACHE_ENTRIES = 150;
+
+export function invalidateInvoicePdfCache(invoiceId) {
+  if (!invoiceId) return;
+  const prefix = String(invoiceId);
+  for (const key of pdfCache.keys()) {
+    if (key.startsWith(prefix)) {
+      pdfCache.delete(key);
+    }
+  }
+}
+
 function formatDate(d) {
   if (!d) return '—';
   const date = new Date(d);
@@ -23,6 +69,15 @@ function formatInr(val) {
 }
 
 export async function generateInvoicePdf(inv, options = {}) {
+  const invId = inv._id ? String(inv._id) : null;
+  const cacheKey = invId
+    ? `${invId}_${inv.invoiceNo || ''}_${new Date(inv.updatedAt || inv.createdAt || 0).getTime()}_${inv.paid || 0}_${inv.total || 0}_${inv.status || ''}_${(inv.paymentRows || []).length}`
+    : null;
+
+  if (cacheKey && !options.bypassCache && pdfCache.has(cacheKey)) {
+    return pdfCache.get(cacheKey);
+  }
+
   return new Promise((resolve, reject) => {
     // Standard A4 dimensions: 595.28 x 841.89 pt
     const doc = new PDFDocument({
@@ -39,31 +94,37 @@ export async function generateInvoicePdf(inv, options = {}) {
 
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      if (cacheKey && !options.bypassCache) {
+        if (pdfCache.size >= MAX_CACHE_ENTRIES) {
+          const oldestKey = pdfCache.keys().next().value;
+          if (oldestKey) pdfCache.delete(oldestKey);
+        }
+        pdfCache.set(cacheKey, buffer);
+      }
+      resolve(buffer);
+    });
     doc.on('error', reject);
 
-    // Font setup: prefer Calibri if available on Windows, fallback to Helvetica
-    const calibriPath = 'C:/Windows/Fonts/calibri.ttf';
-    const calibriBoldPath = 'C:/Windows/Fonts/calibrib.ttf';
-    const calibriItalicPath = 'C:/Windows/Fonts/calibrii.ttf';
-
+    // Font setup: prefer Calibri if available, fallback to Helvetica
     let regularFont = 'Helvetica';
     let boldFont = 'Helvetica-Bold';
     let italicFont = 'Helvetica-Oblique';
 
-    try {
-      if (fs.existsSync(calibriPath) && fs.existsSync(calibriBoldPath)) {
+    if (hasCalibri) {
+      try {
         doc.registerFont('Calibri', calibriPath);
         doc.registerFont('Calibri-Bold', calibriBoldPath);
-        if (fs.existsSync(calibriItalicPath)) {
+        if (hasCalibriItalic) {
           doc.registerFont('Calibri-Italic', calibriItalicPath);
           italicFont = 'Calibri-Italic';
         }
         regularFont = 'Calibri';
         boldFont = 'Calibri-Bold';
+      } catch (e) {
+        console.warn('Using standard fallback fonts:', e.message);
       }
-    } catch (e) {
-      console.warn('Using standard fallback fonts:', e.message);
     }
 
     // 1. Draw top geometric header decoration
@@ -73,11 +134,10 @@ export async function generateInvoicePdf(inv, options = {}) {
       console.error('Failed to draw header decoration:', e.message);
     }
 
-    // 2. Draw EFTS Logo on top-left
-    const logoPath = path.resolve(__dirname, '../assets/logo.png');
-    if (fs.existsSync(logoPath)) {
+    // 2. Draw EFTS Logo on top-left using cached buffer
+    if (cachedLogoBuffer) {
       try {
-        doc.image(logoPath, 34, 115, { width: 56 });
+        doc.image(cachedLogoBuffer, 34, 115, { width: 56 });
       } catch (e) {
         console.warn('Failed to embed logo:', e.message);
       }
@@ -165,13 +225,12 @@ export async function generateInvoicePdf(inv, options = {}) {
       }
     }
 
-    // 5. Central Watermark behind Payment History Table
-    const watermarkPath = path.resolve(__dirname, '../assets/invoice-watermark.png');
-    if (fs.existsSync(watermarkPath)) {
+    // 5. Central Watermark behind Payment History Table using cached buffer
+    if (cachedWatermarkBuffer) {
       try {
         doc.save();
         // Exact original coordinates from template: x = 133.75, y = 301.35, width = 325.75, height = 239.14
-        doc.image(watermarkPath, 133.75, 301.35, { width: 325.75, height: 239.14 });
+        doc.image(cachedWatermarkBuffer, 133.75, 301.35, { width: 325.75, height: 239.14 });
         doc.restore();
       } catch (e) {
         console.warn('Failed to embed watermark:', e.message);

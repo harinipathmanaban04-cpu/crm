@@ -373,6 +373,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
   // Submit invoice
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submitting) return;
 
     if (!formData.customerName?.trim()) {
       toast('Please enter or select a customer name', 'error');
@@ -389,14 +390,24 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
 
     setSubmitting(true);
     try {
+      const cleanCustomerId = selectedCustomer && selectedCustomer !== 'manual' && selectedCustomer.length === 24
+        ? selectedCustomer
+        : undefined;
+      const cleanCourseId = formData.courseId && formData.courseId.length === 24
+        ? formData.courseId
+        : undefined;
+      const cleanAdmissionId = formData.admissionId && formData.admissionId.length === 24
+        ? formData.admissionId
+        : undefined;
+
       const payload = {
-        invoiceNo: formData.invoiceNo,
-        customer: selectedCustomer || undefined,
+        invoiceNo: formData.invoiceNo || undefined,
+        customer: cleanCustomerId,
         customerName: formData.customerName.trim(),
         customerEmail: formData.customerEmail?.trim() || undefined,
         customerPhone: formData.customerPhone?.trim() || undefined,
-        course: formData.courseId || undefined,
-        admission: formData.admissionId || undefined,
+        course: cleanCourseId,
+        admission: cleanAdmissionId,
         programName: formData.programName || undefined,
         mode: formData.mode || 'Online',
         description: formData.description || undefined,
