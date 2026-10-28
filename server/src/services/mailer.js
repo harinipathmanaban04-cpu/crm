@@ -16,9 +16,7 @@ export function isSmtpConfigured() {
   return Boolean(host && user && pass);
 }
 
-// SMTP (Gmail) is blocked on Render's free plan, so only use it locally.
 export function isSmtpAvailable() {
-  if (isRenderEnvironment()) return false;
   return isSmtpConfigured();
 }
 
@@ -26,6 +24,21 @@ export function isResendConfigured() {
   return Boolean((process.env.RESEND_API_KEY || '').trim());
 }
 
+export async function verifySmtpConnection() {
+  if (!isSmtpConfigured()) {
+    console.log('[email] SMTP not configured (missing SMTP_HOST/SMTP_USER/SMTP_PASS).');
+    return false;
+  }
+  try {
+    const transporter = getSmtpTransporter();
+    await transporter.verify();
+    console.log(`[email] SMTP configured and connection verified: host=${process.env.SMTP_HOST || 'smtp.gmail.com'} port=${process.env.SMTP_PORT || 587} user=${(process.env.SMTP_USER || process.env.EMAIL_USER || '').trim()}`);
+    return true;
+  } catch (e) {
+    console.error('[email] SMTP connection verification failed:', e?.message || e);
+    return false;
+  }
+}
 export function isEmailConfigured() {
   return isResendConfigured() || isSmtpAvailable() || isGmailConfigured();
 }
@@ -126,12 +139,7 @@ async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
     throw new Error('PDF attachment buffer is empty or corrupt. Could not send email.');
   }
 
-  // 1. Prefer Resend HTTPS API (works on Render free plan)
-  if (isResendConfigured()) {
-    return await sendViaResend({ to: cleanTo, subject, text, html, pdfBuffer, filename });
-  }
-
-  // 2. Use SMTP only when available (local development)
+  // 1. Use SMTP (Gmail SMTP) when configured
   if (isSmtpAvailable()) {
     const transporter = getSmtpTransporter();
     const smtpHost = (process.env.SMTP_HOST || '').toLowerCase();
@@ -194,8 +202,13 @@ async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
     return { ok: true, messageId, provider: 'gmail' };
   }
 
-  // 3. Graceful error explaining missing configuration
+  // 3. Optional Resend fallback (not required)
+  if (isResendConfigured()) {
+    return await sendViaResend({ to: cleanTo, subject, text, html, pdfBuffer, filename });
+  }
+
+  // 4. Graceful error explaining missing configuration
   throw new Error(
-    'Email service is not configured. Please set RESEND_API_KEY (recommended for Render) or SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env or Render environment.'
+    'Email service is not configured. Please set SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) or configure Gmail OAuth in server environment.'
   );
 }

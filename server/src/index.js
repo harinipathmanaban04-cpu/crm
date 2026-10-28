@@ -20,6 +20,7 @@ app.set('trust proxy', 1);
 import bcrypt from 'bcryptjs';
 import { initSocket } from './realtime.js';
 import { User } from './models.js';
+import { verifySmtpConnection, isEmailConfigured } from './services/mailer.js';
 import { normEmail } from './util.js';
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
@@ -89,6 +90,9 @@ mongoose.connect(mongoUri, {
       console.log('Created Super Admin', email);
     }
     console.log('✅ Database connected:', mongoose.connection.name);
+    // Safe email configuration diagnostics (no secrets)
+    console.log(`[email] Email configured: ${isEmailConfigured()}`);
+    verifySmtpConnection().catch(() => {});
   })
   .catch((e) => {
     console.error('❌ MongoDB connection failed:', e.message);
