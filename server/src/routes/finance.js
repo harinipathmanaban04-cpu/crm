@@ -535,15 +535,32 @@ R.post('/invoices/:id/send-email', async (req, res) => {
 
   if (!isEmailConfigured()) {
     inv.emailStatus = 'Failed';
-    inv.emailError = 'Email service not configured. Configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env or Render environment.';
+    inv.emailError = 'Email service not configured. Configure RESEND_API_KEY (recommended for Render) or SMTP credentials.';
     await inv.save().catch(() => {});
-    throw httpErr(503, 'Email service is not configured. Please configure SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env.');
+    throw httpErr(503, 'Email service is not configured. Please configure RESEND_API_KEY (recommended) or SMTP credentials.');
   }
 
   const recipient = (req.body?.recipient || inv.customerEmail || inv.customer?.email || inv.emailRecipient || '').trim().toLowerCase();
   const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
   if (!recipient || !EMAIL_REGEX.test(recipient)) {
     throw httpErr(400, `Invalid recipient email address "${recipient}". Please provide a valid email (e.g. student@gmail.com).`);
+  }
+
+  // Prevent duplicate invoice emails on retries within a short window
+  const DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+  if (
+    inv.emailStatus === 'Sent' &&
+    inv.emailRecipient === recipient &&
+    inv.emailSentAt &&
+    Date.now() - new Date(inv.emailSentAt).getTime() < DUPLICATE_WINDOW_MS
+  ) {
+    return res.json({
+      ok: true,
+      messageId: inv.emailMessageId,
+      recipient,
+      provider: 'cached',
+      duplicate: true,
+    });
   }
 
   sendingLocks.set(String(inv._id), now);
@@ -594,7 +611,7 @@ R.post('/invoices/:id/send-email', async (req, res) => {
     inv.emailError = e.message;
     inv.emailRecipient = recipient;
     await inv.save().catch(() => {});
-    throw httpErr(500, `Failed to send email: ${e.message}`);
+    throw httpErr(502, `Failed to send email: ${e.message}`);
   } finally {
     sendingLocks.delete(String(inv._id));
   }

@@ -3,6 +3,12 @@ import { isGmailConfigured, sendInvoiceEmail as sendViaGmail } from './gmail.js'
 
 let cachedTransporter = null;
 
+function isRenderEnvironment() {
+  return process.env.RENDER === 'true' ||
+    Boolean(process.env.RENDER_EXTERNAL_URL) ||
+    Boolean(process.env.RENDER_SERVICE_NAME);
+}
+
 export function isSmtpConfigured() {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER || process.env.EMAIL_USER;
@@ -10,8 +16,18 @@ export function isSmtpConfigured() {
   return Boolean(host && user && pass);
 }
 
+// SMTP (Gmail) is blocked on Render's free plan, so only use it locally.
+export function isSmtpAvailable() {
+  if (isRenderEnvironment()) return false;
+  return isSmtpConfigured();
+}
+
+export function isResendConfigured() {
+  return Boolean((process.env.RESEND_API_KEY || '').trim());
+}
+
 export function isEmailConfigured() {
-  return isSmtpConfigured() || isGmailConfigured();
+  return isResendConfigured() || isSmtpAvailable() || isGmailConfigured();
 }
 
 function getSmtpTransporter() {
@@ -55,12 +71,67 @@ export async function sendInvoiceMail({ to, subject, text, html, pdfBuffer, file
   const cleanTo = to.trim().toLowerCase();
 
   // Validate PDF attachment buffer
+
+async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
+  const apiKey = (process.env.RESEND_API_KEY || '').trim();
+  if (!apiKey) throw new Error('Resend is not configured (missing RESEND_API_KEY).');
+
+  const from = (process.env.RESEND_FROM || process.env.SMTP_FROM || 'Eco Friendly Tech Solutions <onboarding@resend.dev>').trim();
+  const replyTo = (process.env.COMPANY_EMAIL || process.env.SMTP_USER || '').trim() || 'info@eco-friendly.tech';
+
+  const attachmentName = filename || 'Invoice.pdf';
+  const payload = {
+    from,
+    to: [to],
+    subject,
+    text,
+    html: html || String(text || '').replace(/\n/g, '<br/>'),
+    reply_to: replyTo,
+    attachments: [
+      {
+        filename: attachmentName,
+        content: pdfBuffer.toString('base64'),
+        content_type: 'application/pdf',
+      },
+    ],
+  };
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  let data = {};
+  try { data = await res.json(); } catch { data = {}; }
+
+  if (!res.ok) {
+    const message =
+      data?.message ||
+      data?.error?.message ||
+      data?.name ||
+      `Resend API request failed with status ${res.status}`;
+    throw new Error(message);
+  }
+
+  return { ok: true, messageId: data?.id || data?.messageId || null, provider: 'resend' };
+}
+
+
   if (!pdfBuffer || !Buffer.isBuffer(pdfBuffer) || pdfBuffer.length === 0) {
     throw new Error('PDF attachment buffer is empty or corrupt. Could not send email.');
   }
 
-  // 1. Try SMTP if configured
-  if (isSmtpConfigured()) {
+  // 1. Prefer Resend HTTPS API (works on Render free plan)
+  if (isResendConfigured()) {
+    return await sendViaResend({ to: cleanTo, subject, text, html, pdfBuffer, filename });
+  }
+
+  // 2. Use SMTP only when available (local development)
+  if (isSmtpAvailable()) {
     const transporter = getSmtpTransporter();
     const smtpHost = (process.env.SMTP_HOST || '').toLowerCase();
     const smtpUser = (process.env.SMTP_USER || process.env.EMAIL_USER || '').trim();
@@ -124,6 +195,6 @@ export async function sendInvoiceMail({ to, subject, text, html, pdfBuffer, file
 
   // 3. Graceful error explaining missing configuration
   throw new Error(
-    'Email service is not configured. Please set SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env or Render environment.'
+    'Email service is not configured. Please set RESEND_API_KEY (recommended for Render) or SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) in server/.env or Render environment.'
   );
 }

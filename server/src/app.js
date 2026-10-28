@@ -13,6 +13,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import mongoose from 'mongoose';
 import { sanitize } from './util.js';
+import { HttpError } from './util.js';
 import { auth } from './middleware.js';
 import authRoutes from './routes/auth.js';
 import users from './routes/users.js';
@@ -148,6 +149,10 @@ app.use((err, req, res, next) => {
     return res.status(403).json({
       message: 'This origin is not allowed to access the API.',
     });
+  }
+
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ message: err.message });
   }
 
   const status = err.status || 500;
