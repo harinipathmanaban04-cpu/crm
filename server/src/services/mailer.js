@@ -35,7 +35,15 @@ export async function verifySmtpConnection() {
     console.log(`[email] SMTP configured and connection verified: host=${process.env.SMTP_HOST || 'smtp.gmail.com'} port=${process.env.SMTP_PORT || 587} user=${(process.env.SMTP_USER || process.env.EMAIL_USER || '').trim()}`);
     return true;
   } catch (e) {
-    console.error('[email] SMTP connection verification failed:', e?.message || e);
+    console.error('[email] SMTP connection verification failed:', {
+      code: e?.code,
+      command: e?.command,
+      responseCode: e?.responseCode,
+      message: e?.message || String(e),
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: process.env.SMTP_PORT || 587,
+      environment: isRenderEnvironment() ? 'render' : 'local',
+    });
     return false;
   }
 }
@@ -66,7 +74,7 @@ function getSmtpTransporter() {
     greetingTimeout: 10000,
     socketTimeout: 30000,
     tls: {
-      rejectUnauthorized: false,
+      rejectUnauthorized: true,
       minVersion: 'TLSv1.2',
     },
   });
@@ -165,27 +173,45 @@ async function sendViaResend({ to, subject, text, html, pdfBuffer, filename }) {
       fromName = nameMatch[1].trim();
     }
 
-    const info = await transporter.sendMail({
-      from: {
-        name: fromName,
-        address: fromAddress,
-      },
-      replyTo: {
-        name: 'Eco Friendly Tech Solutions',
-        address: process.env.COMPANY_EMAIL || 'info@eco-friendly.tech',
-      },
-      to: cleanTo,
-      subject,
-      text,
-      html: html || text.replace(/\n/g, '<br/>'),
-      attachments: [
-        {
-          filename: filename || 'Invoice.pdf',
-          content: pdfBuffer,
-          contentType: 'application/pdf',
+let info;
+    try {
+      info = await transporter.sendMail({
+        from: {
+          name: fromName,
+          address: fromAddress,
         },
-      ],
-    });
+        replyTo: {
+          name: 'Eco Friendly Tech Solutions',
+          address: process.env.COMPANY_EMAIL || 'info@eco-friendly.tech',
+        },
+        to: cleanTo,
+        subject,
+        text,
+        html: html || text.replace(/\n/g, '<br/>'),
+        attachments: [
+          {
+            filename: filename || 'Invoice.pdf',
+            content: pdfBuffer,
+            contentType: 'application/pdf',
+          },
+        ],
+      });
+    } catch (e) {
+      console.error('[email] SMTP send failed:', {
+        code: e?.code,
+        command: e?.command,
+        responseCode: e?.responseCode,
+        message: e?.message || String(e),
+        host: (process.env.SMTP_HOST || 'smtp.gmail.com').trim(),
+        port: Number(process.env.SMTP_PORT) || 587,
+        secure: process.env.SMTP_SECURE === 'true' || Number(process.env.SMTP_PORT) === 465,
+        environment: isRenderEnvironment() ? 'render' : 'local',
+      });
+      if (isRenderEnvironment()) {
+        console.warn('[email] Render free web services block outbound SMTP on ports 25/465/587. Use a paid Render instance or an HTTPS email provider for production email.');
+      }
+      throw e;
+    }
 
     return { ok: true, messageId: info.messageId, provider: 'smtp' };
   }
