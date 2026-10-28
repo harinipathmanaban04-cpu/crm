@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
-import { Course, Admission, Invoice, Payment, Customer, nextSeq, nextInvoiceNo } from '../models.js';
+import { Course, Admission, Invoice, Payment, Customer, nextSeq, nextInvoiceNo, getInitialInvoiceSeqForYear } from '../models.js';
 import { crud } from './crud.js';
 import { scopeFor } from '../scope.js';
 import { pick, diff, httpErr, amountToIndianWords } from '../util.js';
@@ -134,18 +134,19 @@ const IPOP = [
 
 /* 1. Preview Next Sequential Invoice Number */
 R.get('/invoices/next-number', async (req, res) => {
-  const year = new Date().getFullYear();
-  const prefix = `EFTS-INV-${year}-`;
+  const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+  const prefix = `EFTS-INV-/${year}-`;
+  const initialSeq = getInitialInvoiceSeqForYear(year);
 
   let maxDbSeq = 0;
   try {
     const existing = await Invoice.find(
-      { invoiceNo: new RegExp(`^${prefix}\\d+$`) },
+      { invoiceNo: new RegExp(`^EFTS-INV-/?${year}-(\\d+)$`) },
       { invoiceNo: 1 }
     ).lean();
 
     for (const item of existing) {
-      const m = item.invoiceNo?.match(new RegExp(`^${prefix}(\\d+)$`));
+      const m = item.invoiceNo?.match(new RegExp(`^EFTS-INV-/?${year}-(\\d+)$`));
       if (m && m[1]) {
         const num = parseInt(m[1], 10);
         if (num > maxDbSeq) maxDbSeq = num;
@@ -158,7 +159,7 @@ R.get('/invoices/next-number', async (req, res) => {
   const Counter = Invoice.db.model('Counter');
   const counterDoc = await Counter.findById(`inv_${year}`);
   const counterSeq = counterDoc?.seq || 0;
-  const safeSeq = Math.max(counterSeq, maxDbSeq) + 1;
+  const safeSeq = Math.max(initialSeq - 1, counterSeq, maxDbSeq) + 1;
   const invoiceNo = `${prefix}${String(safeSeq).padStart(3, '0')}`;
   res.json({ invoiceNo, year, nextSeq: safeSeq });
 });
@@ -293,11 +294,8 @@ R.post('/invoices', requireRole(...ALL_ROLES), async (req, res) => {
   const courseId = isValidObjectId(req.body.course) ? req.body.course : (customerDoc?.course || undefined);
   const admissionId = isValidObjectId(req.body.admission) ? req.body.admission : undefined;
 
-  // Calculate guaranteed unique invoice number and create document with retry on collision
-  let invoiceNo = req.body.invoiceNo?.trim();
-  if (!invoiceNo || invoiceNo.includes('—') || (await Invoice.exists({ invoiceNo }))) {
-    invoiceNo = await nextInvoiceNo();
-  }
+  // Calculate guaranteed unique sequential invoice number on backend using atomic counter
+  let invoiceNo = await nextInvoiceNo();
 
   let inv = null;
   for (let attempt = 0; attempt < 3; attempt++) {

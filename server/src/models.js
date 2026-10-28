@@ -20,22 +20,29 @@ const hide = { toJSON: { transform: (d, r) => { delete r.passwordHash; delete r.
 export const Counter = model('Counter', new Schema({ _id: String, seq: { type: Number, default: 0 } }));
 export const nextSeq = async (k) => (await Counter.findByIdAndUpdate(k, { $inc: { seq: 1 } }, { new: true, upsert: true })).seq;
 
-export const nextInvoiceNo = async () => {
-  const year = new Date().getFullYear();
-  const prefix = `EFTS-INV-${year}-`;
+export const getInitialInvoiceSeqForYear = (year = new Date().getFullYear()) => {
+  // Start from 030 for 2026 as per requirement; reset to 001 for any new year
+  return Number(year) === 2026 ? 30 : 1;
+};
+
+export const nextInvoiceNo = async (targetYear) => {
+  const year = targetYear ? Number(targetYear) : new Date().getFullYear();
+  const prefix = `EFTS-INV-/${year}-`;
+  const initialSeq = getInitialInvoiceSeqForYear(year);
   const InvoiceModel = mongoose.models.Invoice;
 
-  // 1. Scan existing database records to find the true highest sequence number for this year
+  // 1. Scan existing database records to find the highest valid sequence number for this year
+  // (Recognizes both EFTS-INV-/2026-030 and previous EFTS-INV-2026-010 formats)
   let maxDbSeq = 0;
   if (InvoiceModel) {
     try {
       const existingInvoices = await InvoiceModel.find(
-        { invoiceNo: new RegExp(`^${prefix}\\d+$`) },
+        { invoiceNo: new RegExp(`^EFTS-INV-/?${year}-(\\d+)$`) },
         { invoiceNo: 1 }
       ).lean();
 
       for (const inv of existingInvoices) {
-        const m = inv.invoiceNo?.match(new RegExp(`^${prefix}(\\d+)$`));
+        const m = inv.invoiceNo?.match(new RegExp(`^EFTS-INV-/?${year}-(\\d+)$`));
         if (m && m[1]) {
           const num = parseInt(m[1], 10);
           if (num > maxDbSeq) maxDbSeq = num;
@@ -46,11 +53,16 @@ export const nextInvoiceNo = async () => {
     }
   }
 
-  // 2. Ensure Counter document is synchronized with existing invoices in MongoDB
-  const counterDoc = await Counter.findById(`inv_${year}`);
-  const currentCounter = counterDoc?.seq || 0;
-  if (currentCounter < maxDbSeq) {
-    await Counter.findByIdAndUpdate(`inv_${year}`, { $set: { seq: maxDbSeq } }, { upsert: true });
+  // 2. Ensure Counter document is initialized to at least (initialSeq - 1) or maxDbSeq
+  const baseSeq = Math.max(initialSeq - 1, maxDbSeq);
+  try {
+    const counterDoc = await Counter.findById(`inv_${year}`);
+    const currentCounter = counterDoc?.seq || 0;
+    if (currentCounter < baseSeq) {
+      await Counter.findByIdAndUpdate(`inv_${year}`, { $max: { seq: baseSeq } }, { upsert: true });
+    }
+  } catch (err) {
+    console.warn('Counter initialization warning:', err.message);
   }
 
   // 3. Increment and ensure the generated invoice number does not collide with any existing record

@@ -118,7 +118,8 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
       }
     } catch (e) {
       const yr = new Date().getFullYear();
-      setFormData((prev) => ({ ...prev, invoiceNo: `EFTS-INV-${yr}-001` }));
+      const initial = yr === 2026 ? '030' : '001';
+      setFormData((prev) => ({ ...prev, invoiceNo: `EFTS-INV-/${yr}-${initial}` }));
     } finally {
       setLoadingNumber(false);
     }
@@ -511,7 +512,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                         readOnly
                         value={formData.invoiceNo}
                         className="input font-mono font-bold text-teal-800 bg-white/90 border-teal-200 text-sm w-full truncate"
-                        placeholder="EFTS-INV-2026-..."
+                        placeholder="EFTS-INV-/2026-030"
                       />
                       <button
                         type="button"
@@ -1015,7 +1016,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
               <div className="border border-gray-400 text-xs">
                 <div className="grid grid-cols-4 border-b border-gray-300">
                   <div className="p-1.5 font-bold bg-gray-50 border-r border-gray-300">Invoice No.</div>
-                  <div className="p-1.5 font-mono border-r border-gray-300">{formData.invoiceNo || 'EFTS-INV-...'}</div>
+                  <div className="p-1.5 font-mono border-r border-gray-300">{formData.invoiceNo || 'EFTS-INV-/...'}</div>
                   <div className="p-1.5 font-bold bg-gray-50 border-r border-gray-300">Invoice Date</div>
                   <div className="p-1.5">{fmt(formData.invoiceDate)}</div>
                 </div>

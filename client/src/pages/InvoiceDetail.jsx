@@ -527,7 +527,7 @@ export default function InvoiceDetail() {
             <div className="rounded-lg bg-teal-50 border border-teal-100 p-3 text-xs text-teal-800 flex items-center gap-2">
               <Download className="h-4 w-4 shrink-0 text-teal-600" />
               <span>
-                Attachment: <strong>{inv.invoiceNo}.pdf</strong> (Master official payment invoice generated with dynamic data)
+                Attachment: <strong>{(inv.invoiceNo || 'invoice').replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf</strong> (Master official payment invoice generated with dynamic data)
               </span>
             </div>
             <div className="flex justify-end gap-2 pt-2">

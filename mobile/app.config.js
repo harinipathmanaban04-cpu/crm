@@ -4,7 +4,8 @@ const secure = api.startsWith('https://');
 
 module.exports = {
   expo: {
-    name: 'Eco CRM Sales',
+    owner: 'eco-friendly-tech-solutions',
+    name: 'CRM',
     slug: 'eco-crm-sales',
     version: '1.0.0',
     orientation: 'portrait',
@@ -15,7 +16,7 @@ module.exports = {
     splash: { image: './assets/splash-icon.png', resizeMode: 'contain', backgroundColor: '#FFFFFF' },
     android: {
       package: 'com.ecofriendlytech.crmsales',
-      versionCode: 1,
+      versionCode: 2,
       adaptiveIcon: { foregroundImage: './assets/adaptive-icon.png', backgroundColor: '#FFFFFF' },
       softwareKeyboardLayoutMode: 'resize',
     },
@@ -24,6 +25,11 @@ module.exports = {
       // Plain-HTTP API (LAN testing) needs cleartext traffic; an https:// production URL turns it off.
       ['expo-build-properties', { android: { usesCleartextTraffic: !secure } }],
     ],
-    extra: { apiUrl: api },
+   extra: {
+  apiUrl: api,
+  eas: {
+    projectId: 'dbe859a0-f349-4d6a-aa95-58024d7d10b4',
+  },
+},
   },
 };

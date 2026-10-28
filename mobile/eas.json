@@ -4,11 +4,11 @@
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-YOUR-PRODUCTION-API-DOMAIN" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://crm-2l9s.onrender.com" }
     },
     "production": {
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-YOUR-PRODUCTION-API-DOMAIN" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://crm-2l9s.onrender.com" }
     }
   }
 }
