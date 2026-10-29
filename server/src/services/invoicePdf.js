@@ -25,18 +25,49 @@ try {
   console.warn('Failed to pre-cache watermark image:', e.message);
 }
 
-// Pre-check system font availability once
-const calibriPath = 'C:/Windows/Fonts/calibri.ttf';
-const calibriBoldPath = 'C:/Windows/Fonts/calibrib.ttf';
-const calibriItalicPath = 'C:/Windows/Fonts/calibrii.ttf';
+// Font resolution: prioritize bundled TrueType fonts in assets/fonts to ensure
+// identical Unicode (₹) glyph rendering across all platforms (Linux, Render, Docker, Windows).
+const bundledFontDir = path.resolve(__dirname, '../assets/fonts');
+const bundledCalibriPath = path.resolve(bundledFontDir, 'calibri.ttf');
+const bundledCalibriBoldPath = path.resolve(bundledFontDir, 'calibrib.ttf');
+const bundledCalibriItalicPath = path.resolve(bundledFontDir, 'calibrii.ttf');
+
+const systemCalibriPath = 'C:/Windows/Fonts/calibri.ttf';
+const systemCalibriBoldPath = 'C:/Windows/Fonts/calibrib.ttf';
+const systemCalibriItalicPath = 'C:/Windows/Fonts/calibrii.ttf';
+
+let calibriPath = null;
+let calibriBoldPath = null;
+let calibriItalicPath = null;
 let hasCalibri = false;
 let hasCalibriItalic = false;
 
 try {
-  hasCalibri = fs.existsSync(calibriPath) && fs.existsSync(calibriBoldPath);
-  hasCalibriItalic = hasCalibri && fs.existsSync(calibriItalicPath);
-} catch {
+  if (fs.existsSync(bundledCalibriPath) && fs.existsSync(bundledCalibriBoldPath)) {
+    calibriPath = bundledCalibriPath;
+    calibriBoldPath = bundledCalibriBoldPath;
+    if (fs.existsSync(bundledCalibriItalicPath)) {
+      calibriItalicPath = bundledCalibriItalicPath;
+    }
+  } else if (fs.existsSync(systemCalibriPath) && fs.existsSync(systemCalibriBoldPath)) {
+    calibriPath = systemCalibriPath;
+    calibriBoldPath = systemCalibriBoldPath;
+    if (fs.existsSync(systemCalibriItalicPath)) {
+      calibriItalicPath = systemCalibriItalicPath;
+    }
+  }
+
+  hasCalibri = Boolean(calibriPath && calibriBoldPath);
+  hasCalibriItalic = Boolean(hasCalibri && calibriItalicPath);
+  if (hasCalibri) {
+    console.log(`[invoicePdf] Registered Unicode Calibri fonts: regular=${calibriPath}`);
+  } else {
+    console.warn('[invoicePdf] WARNING: Calibri fonts not found; falling back to Helvetica (Rupee symbol may not display properly).');
+  }
+} catch (e) {
+  console.warn('Failed to detect fonts:', e.message);
   hasCalibri = false;
+  hasCalibriItalic = false;
 }
 
 // In-memory PDF buffer cache (keyed by invoice version)
