@@ -1,4 +1,5 @@
-import { Lead, User, Team, Customer, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
+import mongoose from 'mongoose';
+import { Lead, User, Team, Customer, Task, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
 import { crud } from './crud.js';
 import { requireRole } from '../middleware.js';
 import { scopeFor } from '../scope.js';
@@ -59,7 +60,15 @@ const router = crud({
     await log(req.user, 'lead.updated', 'Lead', doc._id, `Updated lead ${doc.name}${changes.find((c) => c.field === 'status') ? ` → ${doc.status}` : ''}`, { team: doc.team, changes });
     emit('lead:updated', doc);
   },
-  onDelete: async (doc, req) => { await log(req.user, 'lead.deleted', 'Lead', doc._id, `Deleted lead ${doc.name}`, { team: doc.team }); emit('lead:updated', doc); },
+  onDelete: async (doc, req) => {
+    await log(req.user, 'lead.deleted', 'Lead', doc._id, `Deleted lead ${doc.name}`, { team: doc.team });
+    emit('lead:deleted', doc);
+    emit('lead:updated', doc);
+    await Promise.all([
+      Task.updateMany({ lead: doc._id }, { $unset: { lead: 1 } }).catch(() => {}),
+      Customer.updateMany({ lead: doc._id }, { $unset: { lead: 1 } }).catch(() => {}),
+    ]);
+  },
 });
 
 router.post('/:id/assign', requireRole('superadmin', 'admin'), async (req, res) => {
@@ -212,5 +221,79 @@ router.post('/bulk-assign-sales', requireRole('superadmin', 'admin'), async (req
   await log(req.user, 'lead.bulk-assigned-sales', 'Lead', null, `Assigned ${assigned} leads to Sales Executive ${se.name}`, {});
   res.json({ ok: true, assigned });
 });
+
+// Bulk delete leads (SuperAdmin and Admin)
+async function handleBulkDelete(req, res) {
+  const leadIds = req.body.leadIds || req.body.ids;
+  if (!Array.isArray(leadIds) || !leadIds.length) {
+    throw httpErr(400, 'Select at least one lead to delete');
+  }
+
+  // Validate that all elements are valid ObjectIds
+  const invalid = leadIds.filter((id) => !id || !mongoose.Types.ObjectId.isValid(String(id)));
+  if (invalid.length > 0) {
+    throw httpErr(400, `Invalid lead ID(s): ${invalid.slice(0, 3).join(', ')}`);
+  }
+
+  // Convert to ObjectId strings to deduplicate
+  const uniqueIds = [...new Set(leadIds.map(String))];
+
+  // Scope check: fetch only leads the user is authorized to manage
+  const scopeFilter = scopeFor(req.user, 'lead');
+  const leads = await Lead.find({ _id: { $in: uniqueIds }, ...scopeFilter });
+
+  if (!leads.length) {
+    throw httpErr(404, 'No leads found to delete within your authorized scope');
+  }
+
+  // Prevent Admins from deleting leads that belong outside their team scope
+  if (req.user.role === 'admin' && leads.length < uniqueIds.length) {
+    throw httpErr(403, 'You do not have permission to delete one or more selected leads');
+  }
+
+  const authorizedIds = leads.map((l) => l._id);
+
+  // Safe MongoDB deletion query strictly constrained to authorizedIds
+  const result = await Lead.deleteMany({ _id: { $in: authorizedIds } });
+  const deletedCount = result.deletedCount || authorizedIds.length;
+
+  // Unlink loose references in Task and Customer
+  await Promise.all([
+    Task.updateMany({ lead: { $in: authorizedIds } }, { $unset: { lead: 1 } }).catch(() => {}),
+    Customer.updateMany({ lead: { $in: authorizedIds } }, { $unset: { lead: 1 } }).catch(() => {}),
+  ]);
+
+  // Log activity
+  await log(
+    req.user,
+    'lead.bulk-deleted',
+    'Lead',
+    null,
+    `Bulk deleted ${deletedCount} lead${deletedCount !== 1 ? 's' : ''}`,
+    {
+      deletedCount,
+      requestedCount: uniqueIds.length,
+      leadIds: authorizedIds.map(String),
+      names: leads.slice(0, 10).map((l) => l.name),
+    }
+  );
+
+  // Emit realtime updates
+  for (const lead of leads) {
+    emit('lead:deleted', lead);
+    emit('lead:updated', lead);
+  }
+
+  res.json({
+    ok: true,
+    deletedCount,
+    deletedIds: authorizedIds,
+    message: `Successfully deleted ${deletedCount} lead${deletedCount !== 1 ? 's' : ''}`,
+  });
+}
+
+router.post('/bulk-delete', requireRole('superadmin', 'admin'), handleBulkDelete);
+router.delete('/bulk', requireRole('superadmin', 'admin'), handleBulkDelete);
+router.delete('/bulk-delete', requireRole('superadmin', 'admin'), handleBulkDelete);
 
 export default router;

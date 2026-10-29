@@ -18,7 +18,13 @@ const initVal = (f, row) => {
   return v;
 };
 
-export default function ResourcePage({ title, subtitle, endpoint, columns, filters = [], fields = [], canCreate, canEdit, canDelete, params = {}, events = [], actions, headerActions, newLabel = 'Add New', dateFilter = true, refreshKey = 0, onRowClick, embedded }) {
+export default function ResourcePage({
+  title, subtitle, endpoint, columns, filters = [], fields = [], canCreate, canEdit, canDelete,
+  params = {}, events = [], actions, headerActions, newLabel = 'Add New', dateFilter = true, refreshKey = 0,
+  onRowClick, embedded,
+  selectable = false, selected, onToggleSelect, onSelectAll, onClearSelection, bulkActions,
+  deleteConfirmTitle, deleteConfirmText, onDeleteSuccess,
+}) {
   const { user } = useAuth(); const lk = useLookups();
   const [data, setData] = useState({ items: [], total: 0, pages: 1 }); const [loading, setLoading] = useState(true);
   const [f, setF] = useState({}); const [qIn, setQIn] = useState(''); const [page, setPage] = useState(1);
@@ -34,6 +40,11 @@ export default function ResourcePage({ title, subtitle, endpoint, columns, filte
   }, [endpoint, pk, fk, page, refreshKey]);
   useEffect(() => { load(); }, [load]);
   useLive(events, load);
+
+  const pageIds = (data.items || []).map((it) => it._id);
+  const isAllSelected = pageIds.length > 0 && pageIds.every((id) => selected?.has(id));
+  const isSomeSelected = pageIds.some((id) => selected?.has(id));
+  const isIndeterminate = !isAllSelected && isSomeSelected;
 
   const visible = (fl) => !(fl.hidden?.(vals, !!modal?.row, user)) && !(fl.createOnly && modal?.row) && !(fl.editOnly && !modal?.row);
   const openForm = (row) => { const v = {}; fields.forEach((fl) => { v[fl.name] = initVal(fl, row); }); setVals(v); setModal({ row }); };
@@ -54,7 +65,17 @@ export default function ResourcePage({ title, subtitle, endpoint, columns, filte
   };
   const remove = async () => {
     setBusy(true);
-    try { await api.delete(`${endpoint}/${del._id}`); toast('Deleted'); setDel(null); load(); } catch (e) { toast(errMsg(e), 'error'); } finally { setBusy(false); }
+    try {
+      await api.delete(`${endpoint}/${del._id}`);
+      toast('Deleted successfully');
+      onDeleteSuccess?.(del._id);
+      setDel(null);
+      load();
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    } finally {
+      setBusy(false);
+    }
   };
   const setFilter = (k, v) => { setF((x) => ({ ...x, [k]: v })); setPage(1); };
   const clear = () => { setF({}); setQIn(''); setPage(1); };
@@ -89,13 +110,78 @@ export default function ResourcePage({ title, subtitle, endpoint, columns, filte
           {dateFilter && <><input type="date" className="input flex-1 sm:flex-none w-auto text-xs sm:text-sm" value={f.from || ''} onChange={(e) => setFilter('from', e.target.value)} title="From" /><input type="date" className="input flex-1 sm:flex-none w-auto text-xs sm:text-sm" value={f.to || ''} onChange={(e) => setFilter('to', e.target.value)} title="To" /></>}
           {(Object.values(f).some(Boolean)) && <button className="btn btn-ghost text-xs sm:text-sm" onClick={clear}>Clear</button>}
         </div>
+        {selectable && selected?.size > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-teal-50/80 border-b border-teal-100 px-3 sm:px-4 py-2 text-xs text-teal-900">
+            <div className="flex items-center gap-2 font-medium">
+              <span className="inline-flex items-center justify-center h-5 px-1.5 rounded-full bg-[#23AAA7] text-white text-[11px] font-bold">
+                {selected.size}
+              </span>
+              <span>
+                <strong>{selected.size}</strong> {selected.size === 1 ? 'record' : 'records'} selected
+              </span>
+              {pageIds.length > 0 && (
+                <span className="text-gray-500 text-[11px] hidden sm:inline">
+                  ({pageIds.filter((id) => selected.has(id)).length} on this page)
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {bulkActions}
+              {onClearSelection && (
+                <button
+                  type="button"
+                  className="text-xs text-gray-500 hover:text-gray-800 underline ml-1 cursor-pointer"
+                  onClick={onClearSelection}
+                >
+                  Clear selection
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {loading ? <Spinner /> : data.items.length === 0 ? <Empty text="No records found" /> : (
           <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
             <table className="w-full min-w-[620px] sm:min-w-full">
-              <thead className="bg-gray-50"><tr>{columns.map((c) => <th key={c.label} className="th">{c.label}</th>)}{hasActions && <th className="th text-right">Actions</th>}</tr></thead>
+              <thead className="bg-gray-50">
+                <tr>
+                  {selectable && (
+                    <th className="th w-10 sm:w-12 text-center px-2 sm:px-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer accent-[#23AAA7]"
+                        checked={isAllSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = isIndeterminate;
+                        }}
+                        onChange={() => onSelectAll?.(pageIds, !isAllSelected)}
+                        title={isAllSelected ? 'Deselect all on this page' : 'Select all on this page'}
+                        aria-label="Select all on this page"
+                      />
+                    </th>
+                  )}
+                  {columns.map((c) => <th key={c.label} className="th">{c.label}</th>)}
+                  {hasActions && <th className="th text-right">Actions</th>}
+                </tr>
+              </thead>
               <tbody className="divide-y divide-gray-100">
                 {data.items.map((row) => (
-                  <tr key={row._id} className={`hover:bg-gray-50 ${onRowClick ? 'cursor-pointer' : ''}`} onClick={() => onRowClick?.(row)}>
+                  <tr
+                    key={row._id}
+                    className={`hover:bg-gray-50 ${onRowClick ? 'cursor-pointer' : ''} ${selected?.has(row._id) ? 'bg-teal-50/40' : ''}`}
+                    onClick={() => onRowClick?.(row)}
+                  >
+                    {selectable && (
+                      <td className="td w-10 sm:w-12 text-center px-2 sm:px-3" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer accent-[#23AAA7]"
+                          checked={selected?.has(row._id) || false}
+                          onChange={() => onToggleSelect?.(row._id)}
+                          title={selected?.has(row._id) ? 'Deselect' : 'Select'}
+                          aria-label={`Select ${row.name || row.title || row.leadId || row._id}`}
+                        />
+                      </td>
+                    )}
                     {columns.map((c) => <td key={c.label} className="td">{c.render ? c.render(row, user) : row[c.key] ?? '—'}</td>)}
                     {hasActions && (
                       <td className="td" onClick={(e) => e.stopPropagation()}>
@@ -140,7 +226,19 @@ export default function ResourcePage({ title, subtitle, endpoint, columns, filte
           </form>
         </Modal>
       )}
-      {del && <Confirm text="This action cannot be undone. Delete this record?" busy={busy} onYes={remove} onClose={() => setDel(null)} />}
+      {del && (
+        <Confirm
+          title={deleteConfirmTitle || `Delete ${title?.replace(/ Management| Directory|s$/i, '') || 'Record'}`}
+          text={
+            typeof deleteConfirmText === 'function'
+              ? deleteConfirmText(del)
+              : deleteConfirmText || `Are you sure you want to delete "${del.name || del.title || del.leadId || 'this record'}"? This action cannot be undone.`
+          }
+          busy={busy}
+          onYes={remove}
+          onClose={() => setDel(null)}
+        />
+      )}
     </div>
   );
 }

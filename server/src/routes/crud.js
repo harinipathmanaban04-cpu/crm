@@ -42,7 +42,8 @@ export function crud(o) {
     await o.onUpdate?.(doc, req, before);
     res.json(await M.findById(doc._id).populate(o.populate || []));
   });
-  if (o.remove) r.delete('/:id', requireRole(...o.remove.roles), async (req, res) => {
+  if (o.remove) r.delete('/:id', requireRole(...o.remove.roles), async (req, res, next) => {
+    if (req.params.id === 'bulk' || req.params.id === 'bulk-delete') return next();
     const doc = await findScoped(req);
     await o.remove.check?.(doc, req);
     await doc.deleteOne(); await o.onDelete?.(doc, req);

@@ -4,7 +4,7 @@ const { Schema, model } = mongoose;
 const ref = (r, o = {}) => ({ type: Schema.Types.ObjectId, ref: r, default: null, ...o });
 const T = { timestamps: true };
 
-export const LEAD_STATUSES = ['New', 'Contacted', 'Interested', 'Follow-up', 'Qualified', 'Admission in Progress', 'Converted', 'Lost', 'RNR (Ring No Response)', 'Busy', 'Switch Off'];
+export const LEAD_STATUSES = ['New', 'Contacted', 'Interested', 'Follow-up', 'Qualified', 'Admission in Progress', 'Converted', 'Lost', 'RNR (Ring No Response)', 'Busy', 'Switch Off', 'Not Reachable', 'Not Interested'];
 export const PRIORITIES = ['Low', 'Medium', 'High'];
 export const TASK_STATUSES = ['To Do', 'In Progress', 'Completed', 'Cancelled'];
 export const ADMISSION_STAGES = ['Enquiry', 'Counselling', 'Registered', 'Enrolled', 'Completed', 'Dropped'];

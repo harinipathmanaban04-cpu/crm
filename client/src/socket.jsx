@@ -40,7 +40,7 @@ export function useLive(events, cb) {
   useEffect(() => { if (reconnects > 0) ref.current(); }, [reconnects]);
 }
 export const EV = {
-  lead: ['lead:created', 'lead:assigned', 'lead:updated'],
+  lead: ['lead:created', 'lead:assigned', 'lead:updated', 'lead:deleted'],
   task: ['task:assigned', 'task:updated', 'task:completed'],
   team: ['team:member-added', 'team:member-removed', 'team:member-transferred'],
   customer: ['customer:created', 'customer:updated'],

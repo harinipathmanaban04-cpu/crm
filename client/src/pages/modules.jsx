@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, FileSpreadsheet, Plus, Mail, Printer, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, AlertTriangle, Trash2, FileSpreadsheet, Plus, Mail, Printer, Loader2 } from 'lucide-react';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { useLookups } from '../lookups.jsx';
@@ -242,6 +242,8 @@ export function LeadsPage({ mode }) {
 
   // Bulk selection
   const [selected, setSelected] = useState(new Set());
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
   // Bulk assign to Admin modal (SuperAdmin only)
   const [bulkAdminModal, setBulkAdminModal] = useState(false);
@@ -273,6 +275,48 @@ export function LeadsPage({ mode }) {
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+  };
+
+  // Select or deselect all leads on the current page
+  const handleSelectAll = (pageIds, select) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (select) {
+        pageIds.forEach((id) => next.add(id));
+      } else {
+        pageIds.forEach((id) => next.delete(id));
+      }
+      return next;
+    });
+  };
+
+  // Synchronize selection when a lead is individually deleted
+  const handleDeleteSuccess = (id) => {
+    setSelected((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  // Perform bulk deletion of selected leads
+  const doBulkDelete = async () => {
+    if (!selected.size) return;
+    setBulkDeleteLoading(true);
+    try {
+      const countToDelete = selected.size;
+      const res = await api.post('/leads/bulk-delete', { leadIds: [...selected] });
+      const count = res.data.deletedCount ?? countToDelete;
+      toast(`Successfully deleted ${count} lead${count !== 1 ? 's' : ''}`);
+      setSelected(new Set());
+      setBulkDeleteConfirm(false);
+      setTick((t) => t + 1);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
   };
 
   // Handle file selection for import
@@ -382,19 +426,51 @@ export function LeadsPage({ mode }) {
         canEdit
         canDelete={staff && !fu}
         onRowClick={(r) => setView(r._id)}
+        selectable={staff && !fu}
+        selected={selected}
+        onToggleSelect={toggleSelect}
+        onSelectAll={handleSelectAll}
+        onClearSelection={() => setSelected(new Set())}
+        onDeleteSuccess={handleDeleteSuccess}
+        deleteConfirmTitle="Delete Lead"
+        deleteConfirmText={(r) => `Are you sure you want to delete lead "${r.name || r.leadId}"? This action cannot be undone.`}
+        bulkActions={
+          <button
+            type="button"
+            className="btn btn-danger py-1 px-2.5 text-xs flex items-center gap-1.5 shadow-sm"
+            onClick={() => setBulkDeleteConfirm(true)}
+            disabled={bulkDeleteLoading}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {bulkDeleteLoading ? 'Deleting…' : `Delete Selected (${selected.size})`}
+          </button>
+        }
         headerActions={
-          isSA && !fu ? (
+          staff && !fu ? (
             <div className="flex items-center gap-2 flex-wrap">
-              {selected.size > 0 && (
+              {selected.size > 0 ? (
                 <>
-                  <span className="text-xs text-gray-500 font-medium">{selected.size} selected</span>
+                  <span className="text-xs text-gray-500 font-medium hidden sm:inline">
+                    {selected.size} lead{selected.size !== 1 ? 's' : ''} selected
+                  </span>
                   <button
                     type="button"
-                    className="btn btn-teal flex items-center gap-1.5 text-xs"
-                    onClick={() => { setBulkAdminModal(true); setBulkAdminId(''); }}
+                    className="btn btn-danger flex items-center gap-1.5 text-xs shadow-sm"
+                    onClick={() => setBulkDeleteConfirm(true)}
+                    disabled={bulkDeleteLoading}
                   >
-                    <Users className="h-3.5 w-3.5" />Assign to Admin
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {bulkDeleteLoading ? 'Deleting…' : `Delete Selected (${selected.size})`}
                   </button>
+                  {isSA && (
+                    <button
+                      type="button"
+                      className="btn btn-teal flex items-center gap-1.5 text-xs"
+                      onClick={() => { setBulkAdminModal(true); setBulkAdminId(''); }}
+                    >
+                      <Users className="h-3.5 w-3.5" />Assign to Admin
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-primary flex items-center gap-1.5 text-xs"
@@ -410,40 +486,35 @@ export function LeadsPage({ mode }) {
                     <X className="h-3.5 w-3.5" />Clear
                   </button>
                 </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-ghost text-gray-400 border-gray-200 flex items-center gap-1.5 text-xs cursor-not-allowed opacity-60"
+                  disabled
+                  title="Select at least one lead to delete"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />Delete Selected
+                </button>
               )}
-              <button
-                type="button"
-                className="btn btn-ghost flex items-center gap-1.5 text-xs border border-gray-200"
-                onClick={downloadTemplate}
-                title="Download sample Excel template"
-              >
-                <Download className="h-3.5 w-3.5" />Template
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary flex items-center gap-1.5 text-xs"
-                onClick={() => { setImportModal(true); setImportFile(null); setImportPreview(null); setImportResults(null); }}
-              >
-                <Upload className="h-3.5 w-3.5" />Import Excel
-              </button>
-            </div>
-          ) : (isAdmin && !fu && selected.size > 0) ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-medium">{selected.size} selected</span>
-              <button
-                type="button"
-                className="btn btn-primary flex items-center gap-1.5 text-xs"
-                onClick={() => { setBulkSalesModal(true); setBulkSalesId(''); }}
-              >
-                <UserPlus className="h-3.5 w-3.5" />Assign to Sales
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost text-xs"
-                onClick={() => setSelected(new Set())}
-              >
-                <X className="h-3.5 w-3.5" />Clear
-              </button>
+              {isSA && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost flex items-center gap-1.5 text-xs border border-gray-200"
+                    onClick={downloadTemplate}
+                    title="Download sample Excel template"
+                  >
+                    <Download className="h-3.5 w-3.5" />Template
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary flex items-center gap-1.5 text-xs"
+                    onClick={() => { setImportModal(true); setImportFile(null); setImportPreview(null); setImportResults(null); }}
+                  >
+                    <Upload className="h-3.5 w-3.5" />Import Excel
+                  </button>
+                </>
+              )}
             </div>
           ) : null
         }
@@ -456,20 +527,6 @@ export function LeadsPage({ mode }) {
           { key: 'team', label: 'Team', optionsKey: 'teams', hidden: (u) => u.role !== 'superadmin' },
         ]}
         columns={[
-          ...(staff && !fu ? [{
-            label: '',
-            render: (r) => (
-              <button
-                className="p-1 text-gray-400 hover:text-coral-600 transition-colors"
-                onClick={(e) => { e.stopPropagation(); toggleSelect(r._id); }}
-                title={selected.has(r._id) ? 'Deselect' : 'Select'}
-              >
-                {selected.has(r._id)
-                  ? <CheckSquare className="h-4 w-4 text-coral-600" />
-                  : <Square className="h-4 w-4" />}
-              </button>
-            ),
-          }] : []),
           { label: 'Lead', render: (r) => <Two a={r.name} b={r.leadId} /> },
           { label: 'Course', render: (r) => nm(r.course) },
           { label: 'Email / Gmail', render: (r) => r.email ? <a href={`mailto:${r.email}`} className="text-gray-600 hover:text-brand-600 hover:underline truncate max-w-[180px] sm:max-w-[210px] block font-medium" title={r.email} onClick={(e) => e.stopPropagation()}>{r.email}</a> : <span className="text-gray-400">—</span> },
@@ -571,6 +628,49 @@ export function LeadsPage({ mode }) {
             <button className="btn btn-ghost" onClick={() => setBulkSalesModal(false)}>Cancel</button>
             <button className="btn btn-primary" disabled={!bulkSalesId || bulkSalesLoading} onClick={doBulkAssignSales}>
               {bulkSalesLoading ? 'Assigning…' : 'Assign to Sales'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk Delete Confirm Modal */}
+      {bulkDeleteConfirm && (
+        <Modal title="Confirm Bulk Delete" onClose={() => !bulkDeleteLoading && setBulkDeleteConfirm(false)}>
+          <div className="space-y-3">
+            <div className="flex items-start gap-3 rounded-lg bg-red-50 p-3.5 text-red-800">
+              <AlertTriangle className="h-5 w-5 flex-shrink-0 text-red-600 mt-0.5" />
+              <p className="text-sm font-medium">
+                Are you sure you want to delete the {selected.size} selected lead{selected.size !== 1 ? 's' : ''}? This action cannot be undone.
+              </p>
+            </div>
+            <p className="text-xs text-gray-500">
+              All data, assignment history, and follow-ups associated with these {selected.size} selected lead{selected.size !== 1 ? 's' : ''} will be permanently removed from the database.
+            </p>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={bulkDeleteLoading}
+              onClick={() => setBulkDeleteConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger flex items-center gap-1.5"
+              disabled={bulkDeleteLoading}
+              onClick={doBulkDelete}
+            >
+              {bulkDeleteLoading ? (
+                <>
+                  <Spinner className="h-4 w-4" /> Deleting…
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4" /> Delete {selected.size} Lead{selected.size !== 1 ? 's' : ''}
+                </>
+              )}
             </button>
           </div>
         </Modal>
