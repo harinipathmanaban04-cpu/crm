@@ -29,7 +29,13 @@ export function crud(o) {
     const [items, total] = await Promise.all([query.lean(), M.countDocuments(filter)]);
     res.json({ items, total, page, pages: Math.max(1, Math.ceil(total / limit)) });
   });
-  r.get('/:id', async (req, res) => res.json(await findScoped(req, true)));
+  r.get('/:id', async (req, res) => {
+    const doc = await findScoped(req, true);
+    if (o.kind === 'lead' && doc.deletedFor?.some((id) => String(id) === String(req.user._id))) {
+      throw httpErr(404, 'Record not found');
+    }
+    res.json(doc);
+  });
   if (o.create) r.post('/', requireRole(...(o.create.roles || ['superadmin', 'admin', 'sales'])), async (req, res) => {
     const data = await o.create.build(req);
     const doc = await M.create(data);
@@ -46,6 +52,10 @@ export function crud(o) {
     if (req.params.id === 'bulk' || req.params.id === 'bulk-delete') return next();
     const doc = await findScoped(req);
     await o.remove.check?.(doc, req);
+    if (o.remove.action) {
+      await o.remove.action(doc, req, res);
+      return;
+    }
     await doc.deleteOne(); await o.onDelete?.(doc, req);
     res.json({ ok: true });
   });

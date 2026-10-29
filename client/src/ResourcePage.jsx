@@ -66,8 +66,8 @@ export default function ResourcePage({
   const remove = async () => {
     setBusy(true);
     try {
-      await api.delete(`${endpoint}/${del._id}`);
-      toast('Deleted successfully');
+      const res = await api.delete(`${endpoint}/${del._id}`);
+      toast(res.data?.message || 'Lead removed from your view');
       onDeleteSuccess?.(del._id);
       setDel(null);
       load();
@@ -104,7 +104,7 @@ export default function ResourcePage({
           <div className="relative w-full sm:w-auto min-w-[180px] sm:flex-1 sm:max-w-xs"><Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" /><input className="input pl-9" placeholder="Search…" value={qIn} onChange={(e) => setQIn(e.target.value)} /></div>
           {filters.filter((x) => !x.hidden?.(user)).map((fl) => (
             <select key={fl.key} className="input flex-1 sm:flex-none w-auto text-xs sm:text-sm" value={f[fl.key] || ''} onChange={(e) => setFilter(fl.key, e.target.value)}>
-              <option value="">{fl.label}: All</option>{optsFor(fl).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              <option value="">{fl.allLabel || `${fl.label}: All`}</option>{optsFor(fl).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           ))}
           {dateFilter && <><input type="date" className="input flex-1 sm:flex-none w-auto text-xs sm:text-sm" value={f.from || ''} onChange={(e) => setFilter('from', e.target.value)} title="From" /><input type="date" className="input flex-1 sm:flex-none w-auto text-xs sm:text-sm" value={f.to || ''} onChange={(e) => setFilter('to', e.target.value)} title="To" /></>}

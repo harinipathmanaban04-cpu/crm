@@ -22,6 +22,8 @@ export const LEAD_STATUS_LIST = [
   'RNR (Ring No Response)',
   'Busy',
   'Switch Off',
+  'Not Reachable',
+  'Not Interested',
 ];
 
 export const getLogoColor = (tone = '', label = '') => {
@@ -30,7 +32,7 @@ export const getLogoColor = (tone = '', label = '') => {
   if (t.includes('green') || l.includes('converted') || l.includes('completed') || l.includes('paid') || l.includes('admission') || l.includes('collected')) {
     return LOGO_PALETTE.green;
   }
-  if (t.includes('red') || t.includes('coral') || t.includes('orange') || t.includes('amber') || l.includes('lost') || l.includes('overdue') || l.includes('unassigned') || l.includes('unpaid') || l.includes('due') || l.includes('switch off') || l.includes('busy') || l.includes('rnr')) {
+  if (t.includes('red') || t.includes('coral') || t.includes('orange') || t.includes('amber') || l.includes('lost') || l.includes('overdue') || l.includes('unassigned') || l.includes('unpaid') || l.includes('due') || l.includes('switch off') || l.includes('busy') || l.includes('rnr') || l.includes('not reachable') || l.includes('not interested')) {
     return LOGO_PALETTE.coral;
   }
   if (t.includes('blue') || l.includes('new') || l.includes('sales')) {
@@ -81,6 +83,7 @@ const TONES = {
 const MAP = {
   New: 'blue', Contacted: 'indigo', Interested: 'violet', 'Follow-up': 'amber', Qualified: 'teal', 'Admission in Progress': 'orange', Converted: 'green', Lost: 'red',
   'RNR (Ring No Response)': 'amber', RNR: 'amber', Busy: 'orange', 'Switch Off': 'gray',
+  'Not Reachable': 'orange', 'Not reachable': 'orange', 'Not Interested': 'red', 'Not interested': 'red',
   High: 'red', Medium: 'amber', Low: 'gray', 'To Do': 'gray', 'In Progress': 'blue', Completed: 'green', Cancelled: 'red',
   Pending: 'amber', 'Partially Paid': 'orange', Paid: 'green', Failed: 'red', Refunded: 'gray', Success: 'green', Confirmed: 'green',
   Active: 'green', Inactive: 'red', admin: 'violet', sales: 'blue', superadmin: 'teal', Admitted: 'green', Dropped: 'red', 'Not Started': 'gray',

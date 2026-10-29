@@ -124,6 +124,7 @@ const leadSchema = new Schema({
   notes: { type: String, maxlength: 2000 },
   createdBy: ref('User'),
   customer: ref('Customer'),
+  deletedFor: [ref('User', { index: true })],
   history: [{ type: { type: String }, from: ref('User'), to: ref('User'), team: ref('Team'), by: ref('User'), at: { type: Date, default: Date.now } }],
   followUps: [{ note: String, date: { type: Date, default: Date.now }, by: ref('User'), next: Date }],
 }, T);

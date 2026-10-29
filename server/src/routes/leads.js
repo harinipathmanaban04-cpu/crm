@@ -24,12 +24,21 @@ async function resolveAssignment(user, assignedToId, teamId) {
   const t = team ? await Team.findById(team) : null;
   return { assignedTo, team: team || null, admin: t?.admin || null };
 }
-const scoped = (req) => Lead.findOne({ $and: [{ _id: req.params.id }, scopeFor(req.user, 'lead')] });
+const scoped = (req) => Lead.findOne({
+  $and: [
+    { _id: req.params.id },
+    scopeFor(req.user, 'lead'),
+    req.query.hidden === '1' ? { deletedFor: req.user._id } : { deletedFor: { $ne: req.user._id } },
+  ],
+});
 
 const router = crud({
   Model: Lead, kind: 'lead', populate: POP, listSelect: '-history -followUps',
   search: ['name', 'phone', 'email', 'address', 'leadId'], filters: ['status', 'priority', 'source', 'course', 'team', 'admin', 'assignedTo'],
   extra: (req) => [
+    req.query.hidden === '1'
+      ? { deletedFor: req.user._id }
+      : { deletedFor: { $ne: req.user._id } },
     req.query.unassigned === '1' && { assignedTo: null },
     req.query.followUp === 'due' && { nextFollowUp: { $ne: null, $lte: endOfToday() }, status: { $nin: ['Converted', 'Lost'] } },
   ],
@@ -50,7 +59,30 @@ const router = crud({
       Object.assign(doc, updates);
     },
   },
-  remove: { roles: ['superadmin', 'admin'] },
+  remove: {
+    roles: ['superadmin', 'admin'],
+    action: async (doc, req, res) => {
+      // Per-user soft-delete: remove lead only from req.user's view without destroying shared record
+      await Lead.updateOne(
+        { _id: doc._id },
+        {
+          $addToSet: { deletedFor: req.user._id },
+          $push: {
+            history: {
+              type: 'removed_from_view',
+              by: req.user._id,
+              team: doc.team,
+              at: new Date(),
+            },
+          },
+        }
+      );
+      await log(req.user, 'lead.hidden', 'Lead', doc._id, `Removed lead ${doc.name} from view`, { team: doc.team });
+      emit('lead:updated', doc);
+      emit('lead:deleted', { id: String(doc._id), user: String(req.user._id) });
+      res.json({ ok: true, message: 'Lead removed from your view' });
+    },
+  },
   onCreate: async (doc, req) => {
     await log(req.user, 'lead.created', 'Lead', doc._id, `Created lead ${doc.name} (${doc.leadId})`, { team: doc.team });
     emit('lead:created', doc); if (doc.assignedTo) emit('lead:assigned', doc);
@@ -59,15 +91,6 @@ const router = crud({
     const changes = diff(before, doc, ['status', 'priority', 'nextFollowUp', 'name', 'phone', 'email', 'address', 'course']);
     await log(req.user, 'lead.updated', 'Lead', doc._id, `Updated lead ${doc.name}${changes.find((c) => c.field === 'status') ? ` → ${doc.status}` : ''}`, { team: doc.team, changes });
     emit('lead:updated', doc);
-  },
-  onDelete: async (doc, req) => {
-    await log(req.user, 'lead.deleted', 'Lead', doc._id, `Deleted lead ${doc.name}`, { team: doc.team });
-    emit('lead:deleted', doc);
-    emit('lead:updated', doc);
-    await Promise.all([
-      Task.updateMany({ lead: doc._id }, { $unset: { lead: 1 } }).catch(() => {}),
-      Customer.updateMany({ lead: doc._id }, { $unset: { lead: 1 } }).catch(() => {}),
-    ]);
   },
 });
 
@@ -222,11 +245,11 @@ router.post('/bulk-assign-sales', requireRole('superadmin', 'admin'), async (req
   res.json({ ok: true, assigned });
 });
 
-// Bulk delete leads (SuperAdmin and Admin)
+// Bulk remove leads (per-user soft deletion for SuperAdmin and Admin)
 async function handleBulkDelete(req, res) {
   const leadIds = req.body.leadIds || req.body.ids;
   if (!Array.isArray(leadIds) || !leadIds.length) {
-    throw httpErr(400, 'Select at least one lead to delete');
+    throw httpErr(400, 'Select at least one lead to remove');
   }
 
   // Validate that all elements are valid ObjectIds
@@ -243,33 +266,39 @@ async function handleBulkDelete(req, res) {
   const leads = await Lead.find({ _id: { $in: uniqueIds }, ...scopeFilter });
 
   if (!leads.length) {
-    throw httpErr(404, 'No leads found to delete within your authorized scope');
+    throw httpErr(404, 'No leads found within your authorized scope');
   }
 
-  // Prevent Admins from deleting leads that belong outside their team scope
+  // Prevent Admins from modifying leads outside their team scope
   if (req.user.role === 'admin' && leads.length < uniqueIds.length) {
-    throw httpErr(403, 'You do not have permission to delete one or more selected leads');
+    throw httpErr(403, 'You do not have permission to remove one or more selected leads');
   }
 
   const authorizedIds = leads.map((l) => l._id);
 
-  // Safe MongoDB deletion query strictly constrained to authorizedIds
-  const result = await Lead.deleteMany({ _id: { $in: authorizedIds } });
-  const deletedCount = result.deletedCount || authorizedIds.length;
-
-  // Unlink loose references in Task and Customer
-  await Promise.all([
-    Task.updateMany({ lead: { $in: authorizedIds } }, { $unset: { lead: 1 } }).catch(() => {}),
-    Customer.updateMany({ lead: { $in: authorizedIds } }, { $unset: { lead: 1 } }).catch(() => {}),
-  ]);
+  // Per-user soft-delete: Add req.user._id to deletedFor array
+  const result = await Lead.updateMany(
+    { _id: { $in: authorizedIds } },
+    {
+      $addToSet: { deletedFor: req.user._id },
+      $push: {
+        history: {
+          type: 'removed_from_view',
+          by: req.user._id,
+          at: new Date(),
+        },
+      },
+    }
+  );
+  const deletedCount = result.modifiedCount || authorizedIds.length;
 
   // Log activity
   await log(
     req.user,
-    'lead.bulk-deleted',
+    'lead.bulk-hidden',
     'Lead',
     null,
-    `Bulk deleted ${deletedCount} lead${deletedCount !== 1 ? 's' : ''}`,
+    `Removed ${deletedCount} lead${deletedCount !== 1 ? 's' : ''} from view`,
     {
       deletedCount,
       requestedCount: uniqueIds.length,
@@ -280,7 +309,7 @@ async function handleBulkDelete(req, res) {
 
   // Emit realtime updates
   for (const lead of leads) {
-    emit('lead:deleted', lead);
+    emit('lead:deleted', { id: String(lead._id), user: String(req.user._id) });
     emit('lead:updated', lead);
   }
 
@@ -288,9 +317,51 @@ async function handleBulkDelete(req, res) {
     ok: true,
     deletedCount,
     deletedIds: authorizedIds,
-    message: `Successfully deleted ${deletedCount} lead${deletedCount !== 1 ? 's' : ''}`,
+    message: `Successfully removed ${deletedCount} lead${deletedCount !== 1 ? 's' : ''} from your view`,
   });
 }
+
+// Single restore endpoint: restore lead to user's view
+router.post('/:id/restore', requireRole('superadmin', 'admin'), async (req, res) => {
+  const scopeFilter = scopeFor(req.user, 'lead');
+  const lead = await Lead.findOne({ _id: req.params.id, ...scopeFilter });
+  if (!lead) throw httpErr(404, 'Lead not found in your scope');
+
+  await Lead.updateOne({ _id: lead._id }, { $pull: { deletedFor: req.user._id } });
+  lead.history.push({ type: 'restored_to_view', by: req.user._id, at: new Date() });
+  await lead.save();
+
+  await log(req.user, 'lead.restored', 'Lead', lead._id, `Restored lead ${lead.name} to view`, { team: lead.team });
+  emit('lead:updated', lead);
+  res.json({ ok: true, message: 'Lead restored to your view' });
+});
+
+// Bulk restore endpoint: restore multiple leads to user's view
+router.post('/bulk-restore', requireRole('superadmin', 'admin'), async (req, res) => {
+  const leadIds = req.body.leadIds || req.body.ids;
+  if (!Array.isArray(leadIds) || !leadIds.length) throw httpErr(400, 'Select at least one lead to restore');
+
+  const invalid = leadIds.filter((id) => !id || !mongoose.Types.ObjectId.isValid(String(id)));
+  if (invalid.length > 0) throw httpErr(400, `Invalid lead ID(s): ${invalid.slice(0, 3).join(', ')}`);
+
+  const uniqueIds = [...new Set(leadIds.map(String))];
+  const scopeFilter = scopeFor(req.user, 'lead');
+  const leads = await Lead.find({ _id: { $in: uniqueIds }, ...scopeFilter });
+  if (!leads.length) throw httpErr(404, 'No matching leads found');
+
+  const authorizedIds = leads.map((l) => l._id);
+  const result = await Lead.updateMany(
+    { _id: { $in: authorizedIds } },
+    { $pull: { deletedFor: req.user._id } }
+  );
+  const restoredCount = result.modifiedCount || authorizedIds.length;
+
+  await log(req.user, 'lead.bulk-restored', 'Lead', null, `Restored ${restoredCount} leads to view`, { leadIds: authorizedIds });
+  for (const lead of leads) {
+    emit('lead:updated', lead);
+  }
+  res.json({ ok: true, restoredCount, message: `Successfully restored ${restoredCount} lead${restoredCount !== 1 ? 's' : ''} to your view` });
+});
 
 router.post('/bulk-delete', requireRole('superadmin', 'admin'), handleBulkDelete);
 router.delete('/bulk', requireRole('superadmin', 'admin'), handleBulkDelete);

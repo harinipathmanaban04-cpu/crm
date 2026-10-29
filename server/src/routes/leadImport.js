@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 
 const r = Router();
 
-const COL_MAP = {
+export const COL_MAP = {
   name: ['name', 'lead name', 'student name', 'customer name', 'full name', 'lead'],
   phone: ['phone', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number', 'ph', 'ph no', 'ph number', 'mobile no', 'contact no'],
   email: ['email', 'email address', 'mail', 'e-mail', 'gmail', 'gmail address', 'email id', 'gmail id'],
@@ -233,6 +233,10 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
         status = 'Busy';
       } else if (sLow === 'switch off' || sLow === 'switched off') {
         status = 'Switch Off';
+      } else if (sLow === 'not reachable' || sLow === 'unreachable') {
+        status = 'Not Reachable';
+      } else if (sLow === 'not interested' || sLow === 'uninterested') {
+        status = 'Not Interested';
       } else {
         const matched = LEAD_STATUSES.find((x) => x.toLowerCase() === sLow);
         if (matched) status = matched;

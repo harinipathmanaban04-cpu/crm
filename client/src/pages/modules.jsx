@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, AlertTriangle, Trash2, FileSpreadsheet, Plus, Mail, Printer, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, AlertTriangle, Trash2, Archive, RotateCcw, FileSpreadsheet, Plus, Mail, Printer, Loader2 } from 'lucide-react';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { useLookups } from '../lookups.jsx';
@@ -240,10 +240,12 @@ export function LeadsPage({ mode }) {
   const [fd, setFd] = useState({ note: '', next: '', status: '' });
   const [tick, setTick] = useState(0);
 
-  // Bulk selection
+  // Bulk selection & view toggle
   const [selected, setSelected] = useState(new Set());
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+  const [bulkRestoreLoading, setBulkRestoreLoading] = useState(false);
+  const [viewHidden, setViewHidden] = useState(false);
 
   // Bulk assign to Admin modal (SuperAdmin only)
   const [bulkAdminModal, setBulkAdminModal] = useState(false);
@@ -290,7 +292,7 @@ export function LeadsPage({ mode }) {
     });
   };
 
-  // Synchronize selection when a lead is individually deleted
+  // Synchronize selection when a lead is individually deleted/hidden
   const handleDeleteSuccess = (id) => {
     setSelected((prev) => {
       if (!prev.has(id)) return prev;
@@ -300,7 +302,7 @@ export function LeadsPage({ mode }) {
     });
   };
 
-  // Perform bulk deletion of selected leads
+  // Perform bulk deletion (per-user removal from view)
   const doBulkDelete = async () => {
     if (!selected.size) return;
     setBulkDeleteLoading(true);
@@ -308,7 +310,7 @@ export function LeadsPage({ mode }) {
       const countToDelete = selected.size;
       const res = await api.post('/leads/bulk-delete', { leadIds: [...selected] });
       const count = res.data.deletedCount ?? countToDelete;
-      toast(`Successfully deleted ${count} lead${count !== 1 ? 's' : ''}`);
+      toast(res.data.message || `Successfully removed ${count} lead${count !== 1 ? 's' : ''} from your view`);
       setSelected(new Set());
       setBulkDeleteConfirm(false);
       setTick((t) => t + 1);
@@ -316,6 +318,24 @@ export function LeadsPage({ mode }) {
       toast(errMsg(e), 'error');
     } finally {
       setBulkDeleteLoading(false);
+    }
+  };
+
+  // Perform bulk restoration to view
+  const doBulkRestore = async () => {
+    if (!selected.size) return;
+    setBulkRestoreLoading(true);
+    try {
+      const countToRestore = selected.size;
+      const res = await api.post('/leads/bulk-restore', { leadIds: [...selected] });
+      const count = res.data.restoredCount ?? countToRestore;
+      toast(res.data.message || `Restored ${count} lead${count !== 1 ? 's' : ''} to your view`);
+      setSelected(new Set());
+      setTick((t) => t + 1);
+    } catch (e) {
+      toast(errMsg(e), 'error');
+    } finally {
+      setBulkRestoreLoading(false);
     }
   };
 
@@ -415,16 +435,16 @@ export function LeadsPage({ mode }) {
   return (
     <>
       <ResourcePage
-        title={fu ? 'Follow-ups' : user.role === 'sales' ? 'My Leads' : 'Lead Management'}
-        subtitle={fu ? 'Leads with a follow-up due today or overdue' : 'Create, assign and track leads in real time'}
+        title={fu ? 'Follow-ups' : user.role === 'sales' ? 'My Leads' : viewHidden ? 'Removed Leads (Hidden from My View)' : 'Lead Management'}
+        subtitle={fu ? 'Leads with a follow-up due today or overdue' : viewHidden ? 'These leads are hidden from your view only — other authorized users still have access. You can restore them anytime.' : 'Create, assign and track leads in real time'}
         endpoint="/leads"
-        params={fu ? { followUp: 'due' } : {}}
+        params={fu ? { followUp: 'due' } : viewHidden ? { hidden: '1' } : {}}
         refreshKey={tick}
         events={[...EV.lead, ...EV.team]}
         newLabel="New Lead"
-        canCreate={staff && !fu}
-        canEdit
-        canDelete={staff && !fu}
+        canCreate={staff && !fu && !viewHidden}
+        canEdit={!viewHidden}
+        canDelete={staff && !fu && !viewHidden}
         onRowClick={(r) => setView(r._id)}
         selectable={staff && !fu}
         selected={selected}
@@ -432,37 +452,70 @@ export function LeadsPage({ mode }) {
         onSelectAll={handleSelectAll}
         onClearSelection={() => setSelected(new Set())}
         onDeleteSuccess={handleDeleteSuccess}
-        deleteConfirmTitle="Delete Lead"
-        deleteConfirmText={(r) => `Are you sure you want to delete lead "${r.name || r.leadId}"? This action cannot be undone.`}
+        deleteConfirmTitle="Remove Lead"
+        deleteConfirmText={(r) => `Remove "${r.name || r.leadId}" from your view? Other authorized users will still be able to access it.`}
         bulkActions={
-          <button
-            type="button"
-            className="btn btn-danger py-1 px-2.5 text-xs flex items-center gap-1.5 shadow-sm"
-            onClick={() => setBulkDeleteConfirm(true)}
-            disabled={bulkDeleteLoading}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {bulkDeleteLoading ? 'Deleting…' : `Delete Selected (${selected.size})`}
-          </button>
+          viewHidden ? (
+            <button
+              type="button"
+              className="btn btn-teal py-1 px-2.5 text-xs flex items-center gap-1.5 shadow-sm"
+              onClick={doBulkRestore}
+              disabled={bulkRestoreLoading}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {bulkRestoreLoading ? 'Restoring…' : `Restore Selected (${selected.size})`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-danger py-1 px-2.5 text-xs flex items-center gap-1.5 shadow-sm"
+              onClick={() => setBulkDeleteConfirm(true)}
+              disabled={bulkDeleteLoading}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {bulkDeleteLoading ? 'Removing…' : `Remove Selected (${selected.size})`}
+            </button>
+          )
         }
         headerActions={
           staff && !fu ? (
             <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                className={`btn text-xs flex items-center gap-1.5 border transition-colors ${viewHidden ? 'btn-teal' : 'btn-ghost border-gray-300'}`}
+                onClick={() => { setViewHidden(!viewHidden); setSelected(new Set()); }}
+                title={viewHidden ? 'Show active leads' : 'Show leads removed from my view'}
+              >
+                <Archive className="h-3.5 w-3.5" />
+                {viewHidden ? 'Active Leads' : 'Removed Leads'}
+              </button>
               {selected.size > 0 ? (
                 <>
                   <span className="text-xs text-gray-500 font-medium hidden sm:inline">
                     {selected.size} lead{selected.size !== 1 ? 's' : ''} selected
                   </span>
-                  <button
-                    type="button"
-                    className="btn btn-danger flex items-center gap-1.5 text-xs shadow-sm"
-                    onClick={() => setBulkDeleteConfirm(true)}
-                    disabled={bulkDeleteLoading}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {bulkDeleteLoading ? 'Deleting…' : `Delete Selected (${selected.size})`}
-                  </button>
-                  {isSA && (
+                  {viewHidden ? (
+                    <button
+                      type="button"
+                      className="btn btn-teal flex items-center gap-1.5 text-xs shadow-sm"
+                      onClick={doBulkRestore}
+                      disabled={bulkRestoreLoading}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      {bulkRestoreLoading ? 'Restoring…' : `Restore Selected (${selected.size})`}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-danger flex items-center gap-1.5 text-xs shadow-sm"
+                      onClick={() => setBulkDeleteConfirm(true)}
+                      disabled={bulkDeleteLoading}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {bulkDeleteLoading ? 'Removing…' : `Remove Selected (${selected.size})`}
+                    </button>
+                  )}
+                  {!viewHidden && isSA && (
                     <button
                       type="button"
                       className="btn btn-teal flex items-center gap-1.5 text-xs"
@@ -471,13 +524,15 @@ export function LeadsPage({ mode }) {
                       <Users className="h-3.5 w-3.5" />Assign to Admin
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className="btn btn-primary flex items-center gap-1.5 text-xs"
-                    onClick={() => { setBulkSalesModal(true); setBulkSalesId(''); }}
-                  >
-                    <UserPlus className="h-3.5 w-3.5" />Assign to Sales
-                  </button>
+                  {!viewHidden && (
+                    <button
+                      type="button"
+                      className="btn btn-primary flex items-center gap-1.5 text-xs"
+                      onClick={() => { setBulkSalesModal(true); setBulkSalesId(''); }}
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />Assign to Sales
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-ghost text-xs"
@@ -487,16 +542,18 @@ export function LeadsPage({ mode }) {
                   </button>
                 </>
               ) : (
-                <button
-                  type="button"
-                  className="btn btn-ghost text-gray-400 border-gray-200 flex items-center gap-1.5 text-xs cursor-not-allowed opacity-60"
-                  disabled
-                  title="Select at least one lead to delete"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />Delete Selected
-                </button>
+                !viewHidden && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost text-gray-400 border-gray-200 flex items-center gap-1.5 text-xs cursor-not-allowed opacity-60"
+                    disabled
+                    title="Select at least one lead to remove"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />Delete Selected
+                  </button>
+                )
               )}
-              {isSA && (
+              {!viewHidden && isSA && (
                 <>
                   <button
                     type="button"
@@ -519,7 +576,7 @@ export function LeadsPage({ mode }) {
           ) : null
         }
         filters={[
-          { key: 'status', label: 'Status', options: o(LEAD_STATUS_LIST) },
+          { key: 'status', label: 'Status', allLabel: 'All', options: o(LEAD_STATUS_LIST) },
           { key: 'priority', label: 'Priority', options: PRIOS },
           { key: 'source', label: 'Source', options: SOURCES },
           { key: 'course', label: 'Course', optionsKey: 'courses' },
@@ -556,9 +613,18 @@ export function LeadsPage({ mode }) {
         actions={(r) => (
           <>
             <button className="icon-btn" title="View" onClick={() => setView(r._id)}><Eye className="h-4 w-4" /></button>
-            {staff && <button className="icon-btn" title="Assign / reassign" onClick={() => { setAssign(r); setVal(r.assignedTo?._id || ''); }}><UserPlus className="h-4 w-4" /></button>}
-            <button className="icon-btn" title="Record follow-up" onClick={() => { setFollow(r); setFd({ note: '', next: '', status: '' }); }}><PhoneCall className="h-4 w-4" /></button>
-            {r.status !== 'Converted' && !r.customer && <button className="icon-btn hover:text-green-600" title="Convert to customer" onClick={() => act(() => api.post(`/leads/${r._id}/convert`), 'Converted to customer', () => {})}><UserCheck className="h-4 w-4" /></button>}
+            {viewHidden && staff && (
+              <button
+                className="icon-btn hover:text-brand-600"
+                title="Restore to my view"
+                onClick={() => act(() => api.post(`/leads/${r._id}/restore`), 'Lead restored to your view', () => {})}
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+            )}
+            {!viewHidden && staff && <button className="icon-btn" title="Assign / reassign" onClick={() => { setAssign(r); setVal(r.assignedTo?._id || ''); }}><UserPlus className="h-4 w-4" /></button>}
+            {!viewHidden && <button className="icon-btn" title="Record follow-up" onClick={() => { setFollow(r); setFd({ note: '', next: '', status: '' }); }}><PhoneCall className="h-4 w-4" /></button>}
+            {!viewHidden && r.status !== 'Converted' && !r.customer && <button className="icon-btn hover:text-green-600" title="Convert to customer" onClick={() => act(() => api.post(`/leads/${r._id}/convert`), 'Converted to customer', () => {})}><UserCheck className="h-4 w-4" /></button>}
           </>
         )}
       />
@@ -635,16 +701,16 @@ export function LeadsPage({ mode }) {
 
       {/* Bulk Delete Confirm Modal */}
       {bulkDeleteConfirm && (
-        <Modal title="Confirm Bulk Delete" onClose={() => !bulkDeleteLoading && setBulkDeleteConfirm(false)}>
+        <Modal title="Remove Selected Leads" onClose={() => !bulkDeleteLoading && setBulkDeleteConfirm(false)}>
           <div className="space-y-3">
-            <div className="flex items-start gap-3 rounded-lg bg-red-50 p-3.5 text-red-800">
-              <AlertTriangle className="h-5 w-5 flex-shrink-0 text-red-600 mt-0.5" />
+            <div className="flex items-start gap-3 rounded-lg bg-amber-50 p-3.5 text-amber-800 border border-amber-200">
+              <AlertTriangle className="h-5 w-5 flex-shrink-0 text-amber-600 mt-0.5" />
               <p className="text-sm font-medium">
-                Are you sure you want to delete the {selected.size} selected lead{selected.size !== 1 ? 's' : ''}? This action cannot be undone.
+                Remove the {selected.size} selected lead{selected.size !== 1 ? 's' : ''} from your view? Other authorized users will still be able to access {selected.size === 1 ? 'it' : 'them'}.
               </p>
             </div>
             <p className="text-xs text-gray-500">
-              All data, assignment history, and follow-ups associated with these {selected.size} selected lead{selected.size !== 1 ? 's' : ''} will be permanently removed from the database.
+              This action removes {selected.size === 1 ? 'this lead' : 'these leads'} from your Lead Management and Dashboard views while preserving all assignments and records for other team members. You can restore {selected.size === 1 ? 'it' : 'them'} anytime from "Removed Leads".
             </p>
           </div>
           <div className="mt-5 flex justify-end gap-2">
@@ -664,11 +730,11 @@ export function LeadsPage({ mode }) {
             >
               {bulkDeleteLoading ? (
                 <>
-                  <Spinner className="h-4 w-4" /> Deleting…
+                  <Spinner className="h-4 w-4" /> Removing…
                 </>
               ) : (
                 <>
-                  <Trash2 className="h-4 w-4" /> Delete {selected.size} Lead{selected.size !== 1 ? 's' : ''}
+                  <Trash2 className="h-4 w-4" /> Remove {selected.size} Lead{selected.size !== 1 ? 's' : ''}
                 </>
               )}
             </button>

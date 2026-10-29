@@ -17,6 +17,7 @@ const range = (q, field = 'createdAt') => {
 // builds a scoped filter for one collection; `map` names that collection's team/executive/course/status fields
 async function build(u, kind, q, map) {
   const c = [scopeFor(u, kind)]; const add = (k, v) => { if (k && v) c.push({ [k]: v }); };
+  if (kind === 'lead') c.push({ deletedFor: { $ne: u._id } });
   if (u.role === 'superadmin') add('team', toId(q.team));
   if (u.role !== 'sales') add(map.exec, toId(q.executive));
   if (u.role === 'superadmin' && q.admin) { const t = await Team.findOne({ admin: toId(q.admin) }); c.push({ team: t ? t._id : new mongoose.Types.ObjectId() }); }
@@ -122,7 +123,9 @@ const EXPORTS = {
 };
 r.get('/reports/export/:type', async (req, res) => {
   const e = EXPORTS[req.params.type]; if (!e) throw httpErr(404, 'Unknown export');
-  const c = [scopeFor(req.user, e.kind)]; const d = range(req.query); if (d) c.push(d);
+  const c = [scopeFor(req.user, e.kind)];
+  if (e.kind === 'lead') c.push({ deletedFor: { $ne: req.user._id } });
+  const d = range(req.query); if (d) c.push(d);
   let qy = e.M.find({ $and: c }).sort('-createdAt').limit(10000); e.pop.forEach(([p, s]) => { qy = qy.populate(p, s); });
   const rows = await qy.lean();
   const csv = [e.cols.map(([h]) => cell(h)).join(','), ...rows.map((row) => e.cols.map(([, f]) => cell(f(row))).join(','))].join('\n');
@@ -138,7 +141,7 @@ r.get('/lookups', async (req, res) => {
     Team.find(u.role === 'superadmin' ? {} : { _id: u.team || null }).select('name').sort('name').lean(),
     Course.find({ active: true }).select('name fee').sort('name').lean(),
     Customer.find(scopeFor(u, 'customer')).select('name phone').sort('name').limit(500).lean(),
-    Lead.find(scopeFor(u, 'lead')).select('name leadId').sort('-createdAt').limit(300).lean(),
+    Lead.find({ ...scopeFor(u, 'lead'), deletedFor: { $ne: u._id } }).select('name leadId').sort('-createdAt').limit(300).lean(),
     Invoice.find({ $and: [scopeFor(u, 'invoice'), { status: { $in: ['Pending', 'Partially Paid'] } }] }).select('invoiceNo total paid customer').populate('customer', 'name').sort('-createdAt').limit(300).lean(),
   ]);
   if (u.role === 'admin') users.push({ _id: u._id, name: u.name + ' (me)', role: 'admin', team: null });
@@ -149,7 +152,7 @@ r.get('/search', async (req, res) => {
   const s = String(req.query.q || '').trim(); if (s.length < 2) return res.json({ leads: [], customers: [] });
   const R = rx(s);
   const [leads, customers] = await Promise.all([
-    Lead.find({ $and: [scopeFor(req.user, 'lead'), { $or: [{ name: R }, { phone: R }, { email: R }, { address: R }, { leadId: R }] }] }).select('name leadId phone status address').limit(5).lean(),
+    Lead.find({ $and: [scopeFor(req.user, 'lead'), { deletedFor: { $ne: req.user._id } }, { $or: [{ name: R }, { phone: R }, { email: R }, { address: R }, { leadId: R }] }] }).select('name leadId phone status address').limit(5).lean(),
     Customer.find({ $and: [scopeFor(req.user, 'customer'), { $or: [{ name: R }, { phone: R }, { email: R }, { address: R }] }] }).select('name phone address').limit(5).lean(),
   ]);
   res.json({ leads, customers });
