@@ -95,6 +95,7 @@ export default function LeadDetail({ route, navigation }) {
         <Card accent={alt(1)}>
           <InfoRow icon="call-outline" label="Phone" value={lead.phone} onPress={() => open(telUrl(lead.phone), 'place a call')} />
           <InfoRow icon="mail-outline" label="Email" value={lead.email} onPress={lead.email ? () => open(mailUrl(lead.email), 'send email') : undefined} />
+          {lead.address ? <InfoRow icon="location-outline" label="Address" value={lead.address} /> : null}
           <InfoRow icon="school-outline" label="Interested course" value={lead.course?.name} />
           <InfoRow icon="megaphone-outline" label="Source" value={lead.source} />
           <InfoRow icon="person-outline" label="Assigned by" value={lead.createdBy?.name || lead.admin?.name} />

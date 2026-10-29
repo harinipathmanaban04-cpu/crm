@@ -114,8 +114,8 @@ r.get('/reports/summary', async (req, res) => {
 /* CSV export (scoped; guards against spreadsheet formula injection) */
 const cell = (v) => { let s = v == null ? '' : v instanceof Date ? v.toISOString() : String(v); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
 const EXPORTS = {
-  leads: { M: Lead, kind: 'lead', pop: [['assignedTo', 'name'], ['course', 'name'], ['team', 'name']], cols: [['Lead ID', (d) => d.leadId], ['Name', (d) => d.name], ['Phone', (d) => d.phone], ['Email', (d) => d.email], ['Course', (d) => d.course?.name], ['Source', (d) => d.source], ['Team', (d) => d.team?.name], ['Assigned To', (d) => d.assignedTo?.name], ['Status', (d) => d.status], ['Priority', (d) => d.priority], ['Next Follow-up', (d) => d.nextFollowUp], ['Created', (d) => d.createdAt]] },
-  customers: { M: Customer, kind: 'customer', pop: [['owner', 'name'], ['course', 'name'], ['team', 'name']], cols: [['Name', (d) => d.name], ['Phone', (d) => d.phone], ['Email', (d) => d.email], ['Course', (d) => d.course?.name], ['Owner', (d) => d.owner?.name], ['Team', (d) => d.team?.name], ['Admission', (d) => d.admissionStatus], ['Created', (d) => d.createdAt]] },
+  leads: { M: Lead, kind: 'lead', pop: [['assignedTo', 'name'], ['course', 'name'], ['team', 'name']], cols: [['Lead ID', (d) => d.leadId], ['Name', (d) => d.name], ['Phone', (d) => d.phone], ['Email', (d) => d.email], ['Address', (d) => d.address], ['Course', (d) => d.course?.name], ['Source', (d) => d.source], ['Team', (d) => d.team?.name], ['Assigned To', (d) => d.assignedTo?.name], ['Status', (d) => d.status], ['Priority', (d) => d.priority], ['Next Follow-up', (d) => d.nextFollowUp], ['Created', (d) => d.createdAt]] },
+  customers: { M: Customer, kind: 'customer', pop: [['owner', 'name'], ['course', 'name'], ['team', 'name']], cols: [['Name', (d) => d.name], ['Phone', (d) => d.phone], ['Email', (d) => d.email], ['Address', (d) => d.address], ['Course', (d) => d.course?.name], ['Owner', (d) => d.owner?.name], ['Team', (d) => d.team?.name], ['Admission', (d) => d.admissionStatus], ['Created', (d) => d.createdAt]] },
   tasks: { M: Task, kind: 'task', pop: [['assignee', 'name']], cols: [['Title', (d) => d.title], ['Assignee', (d) => d.assignee?.name], ['Priority', (d) => d.priority], ['Status', (d) => d.status], ['Due', (d) => d.dueDate], ['Completed', (d) => d.completedAt]] },
   invoices: { M: Invoice, kind: 'invoice', pop: [['customer', 'name'], ['course', 'name']], cols: [['Invoice', (d) => d.invoiceNo], ['Customer', (d) => d.customer?.name], ['Course', (d) => d.course?.name], ['Total', (d) => d.total], ['Paid', (d) => d.paid], ['Balance', (d) => d.total - d.paid], ['Status', (d) => d.status], ['Payment Date', (d) => d.paymentDate], ['Method', (d) => d.method], ['Txn Ref', (d) => d.txnRef]] },
   payments: { M: Payment, kind: 'payment', pop: [['invoice', 'invoiceNo'], ['customer', 'name']], cols: [['Invoice', (d) => d.invoice?.invoiceNo], ['Customer', (d) => d.customer?.name], ['Amount', (d) => d.amount], ['Method', (d) => d.method], ['Txn Ref', (d) => d.txnRef], ['Date', (d) => d.paymentDate], ['Status', (d) => d.status]] },
@@ -149,8 +149,8 @@ r.get('/search', async (req, res) => {
   const s = String(req.query.q || '').trim(); if (s.length < 2) return res.json({ leads: [], customers: [] });
   const R = rx(s);
   const [leads, customers] = await Promise.all([
-    Lead.find({ $and: [scopeFor(req.user, 'lead'), { $or: [{ name: R }, { phone: R }, { email: R }, { leadId: R }] }] }).select('name leadId phone status').limit(5).lean(),
-    Customer.find({ $and: [scopeFor(req.user, 'customer'), { $or: [{ name: R }, { phone: R }, { email: R }] }] }).select('name phone').limit(5).lean(),
+    Lead.find({ $and: [scopeFor(req.user, 'lead'), { $or: [{ name: R }, { phone: R }, { email: R }, { address: R }, { leadId: R }] }] }).select('name leadId phone status address').limit(5).lean(),
+    Customer.find({ $and: [scopeFor(req.user, 'customer'), { $or: [{ name: R }, { phone: R }, { email: R }, { address: R }] }] }).select('name phone address').limit(5).lean(),
   ]);
   res.json({ leads, customers });
 });

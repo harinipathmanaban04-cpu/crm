@@ -175,10 +175,48 @@ function LeadDetail({ id, onClose }) {
       {!l ? <Spinner /> : (
         <div className="space-y-5 text-sm">
           <div className="grid gap-3 sm:grid-cols-3">
-            {[['Lead ID', l.leadId], ['Name', l.name], ['Phone', l.phone], ['Email', l.email || '—'], ['Course', nm(l.course)], ['Source', l.source], ['Team', nm(l.team)], ['Admin', nm(l.admin)], ['Assigned to', nm(l.assignedTo)], ['Priority', l.priority], ['Next follow-up', fmt(l.nextFollowUp)], ['Created by', nm(l.createdBy)], ['Created', fmtDT(l.createdAt)], ['Updated', fmtDT(l.updatedAt)]].map(([k, v]) => <div key={k}><p className="text-xs text-gray-400">{k}</p><p className="font-medium">{v}</p></div>)}
-            <div><p className="text-xs text-gray-400">Status</p><Badge>{l.status}</Badge></div>
+            {[
+              ['Lead ID', l.leadId],
+              ['Name', l.name],
+              ['Mobile Number', l.phone],
+              ['Email / Gmail', l.email || '—'],
+              ['Address', l.address || '—'],
+              ['Course', nm(l.course)],
+              ['Source', l.source],
+              ['Team', nm(l.team)],
+              ['Admin', nm(l.admin)],
+              ['Assigned to', nm(l.assignedTo)],
+              ['Priority', l.priority],
+              ['Next follow-up', fmt(l.nextFollowUp)],
+              ['Created by', nm(l.createdBy)],
+              ['Created', fmtDT(l.createdAt)],
+              ['Updated', fmtDT(l.updatedAt)],
+            ].map(([k, v]) => {
+              const isEmail = k.includes('Email');
+              const isAddress = k === 'Address';
+              return (
+                <div key={k} className={isAddress ? 'sm:col-span-2' : ''}>
+                  <p className="text-xs font-medium text-gray-500 mb-0.5">{k}</p>
+                  {isEmail && v !== '—' ? (
+                    <a
+                      href={`mailto:${v}`}
+                      className="font-medium text-brand-600 hover:text-brand-700 hover:underline break-all block"
+                      title={v}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {v}
+                    </a>
+                  ) : (
+                    <p className={`font-medium text-gray-900 ${isAddress ? 'break-words' : 'break-all'}`}>
+                      {v}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+            <div><p className="text-xs font-medium text-gray-500 mb-0.5">Status</p><Badge>{l.status}</Badge></div>
           </div>
-          {l.notes && <div><p className="text-xs text-gray-400">Notes</p><p>{l.notes}</p></div>}
+          {l.notes && <div><p className="text-xs font-medium text-gray-500 mb-0.5">Notes</p><p className="rounded-lg bg-gray-50 p-3 text-gray-800 break-words">{l.notes}</p></div>}
           <div><h4 className="mb-2 font-semibold">Assignment history</h4>{l.history?.length ? <ul className="space-y-1 text-gray-600">{[...l.history].reverse().map((h, i) => <li key={i}>{fmtDT(h.at)} — {h.type}{h.from ? ` from ${nm(h.from)}` : ''}{h.to ? ` to ${nm(h.to)}` : ''} <span className="text-gray-400">by {nm(h.by)}</span></li>)}</ul> : <p className="text-gray-400">None</p>}</div>
           <div><h4 className="mb-2 font-semibold">Follow-up activity</h4>{l.followUps?.length ? <ul className="space-y-1 text-gray-600">{[...l.followUps].reverse().map((h, i) => <li key={i}>{fmtDT(h.date)} — {h.note} <span className="text-gray-400">by {nm(h.by)}</span></li>)}</ul> : <p className="text-gray-400">No follow-ups logged</p>}</div>
         </div>
@@ -434,8 +472,9 @@ export function LeadsPage({ mode }) {
           }] : []),
           { label: 'Lead', render: (r) => <Two a={r.name} b={r.leadId} /> },
           { label: 'Course', render: (r) => nm(r.course) },
-          { label: 'Email', render: (r) => r.email ? <a href={`mailto:${r.email}`} className="text-gray-600 hover:text-brand-600 hover:underline truncate max-w-[190px] block" title={r.email} onClick={(e) => e.stopPropagation()}>{r.email}</a> : '—' },
-          { label: 'Mobile Number', render: (r) => r.phone ? <a href={`tel:${r.phone}`} className="whitespace-nowrap font-medium text-gray-700 hover:text-brand-600 hover:underline" onClick={(e) => e.stopPropagation()}>{r.phone}</a> : '—' },
+          { label: 'Email / Gmail', render: (r) => r.email ? <a href={`mailto:${r.email}`} className="text-gray-600 hover:text-brand-600 hover:underline truncate max-w-[180px] sm:max-w-[210px] block font-medium" title={r.email} onClick={(e) => e.stopPropagation()}>{r.email}</a> : <span className="text-gray-400">—</span> },
+          { label: 'Mobile Number', render: (r) => r.phone ? <a href={`tel:${r.phone}`} className="whitespace-nowrap font-medium text-gray-700 hover:text-brand-600 hover:underline" onClick={(e) => e.stopPropagation()}>{r.phone}</a> : <span className="text-gray-400">—</span> },
+          { label: 'Address', render: (r) => r.address ? <span className="text-gray-600 truncate max-w-[180px] sm:max-w-[210px] block" title={r.address}>{r.address}</span> : <span className="text-gray-400">—</span> },
           { label: 'Source', key: 'source' },
           { label: 'Status', render: (r) => <Badge>{r.status}</Badge> },
           { label: 'Priority', render: (r) => <Badge>{r.priority}</Badge> },
@@ -444,17 +483,18 @@ export function LeadsPage({ mode }) {
           { label: 'Follow-up', render: (r) => <span className={r.nextFollowUp && new Date(r.nextFollowUp) < new Date() && !['Converted', 'Lost'].includes(r.status) ? 'font-medium text-red-600' : ''}>{fmt(r.nextFollowUp)}</span> },
         ]}
         fields={[
-          { name: 'name', label: 'Student / customer name', required: true },
-          { name: 'phone', label: 'Phone', type: 'tel', required: true },
-          { name: 'email', label: 'Email', type: 'email' },
-          { name: 'course', label: 'Interested course', type: 'select', optionsKey: 'courses' },
-          { name: 'source', label: 'Lead source', type: 'select', options: SOURCES, default: 'Direct' },
+          { name: 'name', label: 'Student / Customer Name', required: true, placeholder: 'Full Name' },
+          { name: 'phone', label: 'Mobile Number', type: 'tel', required: true, placeholder: 'e.g. 9876543210' },
+          { name: 'email', label: 'Email / Gmail Address', type: 'email', placeholder: 'student@gmail.com' },
+          { name: 'address', label: 'Address', type: 'text', placeholder: 'Complete residential / postal address', allowFileUpload: true },
+          { name: 'course', label: 'Interested Course', type: 'select', optionsKey: 'courses' },
+          { name: 'source', label: 'Lead Source', type: 'select', options: SOURCES, default: 'Direct' },
           { name: 'priority', label: 'Priority', type: 'select', options: PRIOS, default: 'Medium' },
           { name: 'status', label: 'Status', type: 'select', options: o(LEAD_STATUS_LIST), default: 'New' },
-          { name: 'nextFollowUp', label: 'Next follow-up', type: 'date' },
+          { name: 'nextFollowUp', label: 'Next Follow-up', type: 'date' },
           { name: 'assignedTo', label: 'Assign to Sales Executive', type: 'select', optionsKey: 'sales', createOnly: true },
-          { name: 'team', label: 'Assigned team', type: 'select', optionsKey: 'teams', createOnly: true, hidden: (v, e, u) => u.role !== 'superadmin' || !!v.assignedTo, hint: 'Used when no Sales Executive is selected' },
-          { name: 'notes', label: 'Notes', type: 'textarea' },
+          { name: 'team', label: 'Assigned Team', type: 'select', optionsKey: 'teams', createOnly: true, hidden: (v, e, u) => u.role !== 'superadmin' || !!v.assignedTo, hint: 'Used when no Sales Executive is selected' },
+          { name: 'notes', label: 'Notes', type: 'textarea', placeholder: 'Additional lead remarks or notes...' },
         ]}
         actions={(r) => (
           <>
@@ -692,7 +732,7 @@ function CustomerProfile({ id, onClose }) {
       {!d ? <Spinner /> : (
         <div className="space-y-5 text-sm">
           <div className="grid gap-3 sm:grid-cols-3">
-            {[['Name', c.name], ['Phone', c.phone], ['Email', c.email || '—'], ['Course', nm(c.course)], ['Owner', nm(c.owner)], ['Team', nm(c.team)], ['Created by', nm(c.createdBy)], ['Created', fmtDT(c.createdAt)]].map(([k, v]) => <div key={k}><p className="text-xs text-gray-400">{k}</p><p className="font-medium">{v}</p></div>)}
+            {[['Name', c.name], ['Phone', c.phone], ['Email', c.email || '—'], ['Address', c.address || '—'], ['Course', nm(c.course)], ['Owner', nm(c.owner)], ['Team', nm(c.team)], ['Created by', nm(c.createdBy)], ['Created', fmtDT(c.createdAt)]].map(([k, v]) => <div key={k} className={k === 'Address' ? 'sm:col-span-2' : ''}><p className="text-xs text-gray-400">{k}</p><p className="font-medium break-words">{v}</p></div>)}
             <div><p className="text-xs text-gray-400">Admission</p><Badge>{c.admissionStatus}</Badge></div>
           </div>
           {c.notes && <p className="rounded-lg bg-gray-50 p-3">{c.notes}</p>}
@@ -713,7 +753,7 @@ export function CustomersPage() {
       <ResourcePage title={user.role === 'superadmin' ? 'All Customers' : user.role === 'sales' ? 'My Customers' : 'Customers'} subtitle="One shared customer directory — updated live across all roles" endpoint="/customers" events={[...EV.customer, ...EV.team, ...EV.adm]} newLabel="Add Customer" canCreate canEdit canDelete={canDeleteCustomer} onRowClick={(r) => setView(r._id)}
         filters={[{ key: 'course', label: 'Course', optionsKey: 'courses' }, { key: 'admissionStatus', label: 'Admission', options: o(['Not Started', 'In Progress', 'Admitted', 'Dropped']) }, { key: 'owner', label: 'Owner', optionsKey: 'owners', hidden: (u) => u.role === 'sales' }, { key: 'team', label: 'Team', optionsKey: 'teams', hidden: (u) => u.role !== 'superadmin' }]}
         columns={[{ label: 'Customer', render: (r) => <Two a={r.name} b={`${r.phone}${r.email ? ' · ' + r.email : ''}`} /> }, { label: 'Course', render: (r) => nm(r.course) }, { label: 'Owner', render: (r) => nm(r.owner) }, ...(user.role === 'superadmin' ? [{ label: 'Team', render: (r) => nm(r.team) }] : []), { label: 'Admission', render: (r) => <Badge>{r.admissionStatus}</Badge> }, { label: 'Added', render: (r) => fmt(r.createdAt) }]}
-        fields={[{ name: 'name', label: 'Name', required: true }, { name: 'phone', label: 'Phone', type: 'tel', required: true }, { name: 'email', label: 'Email', type: 'email' }, { name: 'course', label: 'Course interest', type: 'select', optionsKey: 'courses' },
+        fields={[{ name: 'name', label: 'Name', required: true }, { name: 'phone', label: 'Phone', type: 'tel', required: true }, { name: 'email', label: 'Email', type: 'email' }, { name: 'address', label: 'Address', type: 'text', placeholder: 'Enter complete address' }, { name: 'course', label: 'Course interest', type: 'select', optionsKey: 'courses' },
           { name: 'owner', label: 'Owner', type: 'select', optionsKey: 'owners', hidden: (v, e, u) => u.role === 'sales', hint: 'Defaults to you' }, { name: 'admissionStatus', label: 'Admission status', type: 'select', options: o(['Not Started', 'In Progress', 'Admitted', 'Dropped']), default: 'Not Started' }, { name: 'notes', label: 'Notes', type: 'textarea' }]}
         actions={(r) => <button className="icon-btn" title="Open profile" onClick={() => setView(r._id)}><Eye className="h-4 w-4" /></button>} />
       {view && <CustomerProfile id={view} onClose={() => setView(null)} />}

@@ -9,7 +9,7 @@ import { assertUnique } from '../services/customer.js';
 
 const POP = [{ path: 'assignedTo', select: 'name email' }, { path: 'admin', select: 'name' }, { path: 'team', select: 'name' }, { path: 'createdBy', select: 'name' }, { path: 'course', select: 'name' },
   { path: 'history.to', select: 'name' }, { path: 'history.from', select: 'name' }, { path: 'history.by', select: 'name' }, { path: 'history.team', select: 'name' }, { path: 'followUps.by', select: 'name' }];
-const FIELDS = ['name', 'phone', 'email', 'course', 'source', 'status', 'priority', 'nextFollowUp', 'notes'];
+const FIELDS = ['name', 'phone', 'email', 'address', 'course', 'source', 'status', 'priority', 'nextFollowUp', 'notes'];
 
 async function resolveAssignment(user, assignedToId, teamId) {
   let team = null, assignedTo = null;
@@ -27,7 +27,7 @@ const scoped = (req) => Lead.findOne({ $and: [{ _id: req.params.id }, scopeFor(r
 
 const router = crud({
   Model: Lead, kind: 'lead', populate: POP, listSelect: '-history -followUps',
-  search: ['name', 'phone', 'email', 'leadId'], filters: ['status', 'priority', 'source', 'course', 'team', 'admin', 'assignedTo'],
+  search: ['name', 'phone', 'email', 'address', 'leadId'], filters: ['status', 'priority', 'source', 'course', 'team', 'admin', 'assignedTo'],
   extra: (req) => [
     req.query.unassigned === '1' && { assignedTo: null },
     req.query.followUp === 'due' && { nextFollowUp: { $ne: null, $lte: endOfToday() }, status: { $nin: ['Converted', 'Lost'] } },
@@ -42,8 +42,11 @@ const router = crud({
   },
   update: {
     apply: async (req, doc) => {
-      const keys = req.user.role === 'sales' ? ['status', 'notes', 'nextFollowUp', 'priority'] : FIELDS;
-      Object.assign(doc, pick(req.body, keys));
+      const keys = req.user.role === 'sales' ? ['status', 'notes', 'nextFollowUp', 'priority', 'address'] : FIELDS;
+      const updates = pick(req.body, keys);
+      if (updates.email !== undefined) updates.email = updates.email ? String(updates.email).trim().toLowerCase() : undefined;
+      if (updates.address !== undefined) updates.address = updates.address ? String(updates.address).trim() : undefined;
+      Object.assign(doc, updates);
     },
   },
   remove: { roles: ['superadmin', 'admin'] },
@@ -52,7 +55,7 @@ const router = crud({
     emit('lead:created', doc); if (doc.assignedTo) emit('lead:assigned', doc);
   },
   onUpdate: async (doc, req, before) => {
-    const changes = diff(before, doc, ['status', 'priority', 'nextFollowUp', 'name', 'phone', 'course']);
+    const changes = diff(before, doc, ['status', 'priority', 'nextFollowUp', 'name', 'phone', 'email', 'address', 'course']);
     await log(req.user, 'lead.updated', 'Lead', doc._id, `Updated lead ${doc.name}${changes.find((c) => c.field === 'status') ? ` → ${doc.status}` : ''}`, { team: doc.team, changes });
     emit('lead:updated', doc);
   },
@@ -104,7 +107,7 @@ router.post('/:id/convert', async (req, res) => {
   const lead = await scoped(req); if (!lead) throw httpErr(404, 'Lead not found');
   if (lead.customer) throw httpErr(409, 'Lead already converted to a customer');
   await assertUnique(lead);
-  const c = await Customer.create({ name: lead.name, phone: lead.phone, email: lead.email, course: lead.course, owner: lead.assignedTo || req.user._id, team: lead.team || req.user.team, createdBy: req.user._id, lead: lead._id, admissionStatus: 'In Progress' });
+  const c = await Customer.create({ name: lead.name, phone: lead.phone, email: lead.email, address: lead.address, course: lead.course, owner: lead.assignedTo || req.user._id, team: lead.team || req.user.team, createdBy: req.user._id, lead: lead._id, admissionStatus: 'In Progress' });
   lead.customer = c._id; lead.status = 'Converted'; await lead.save();
   await log(req.user, 'lead.converted', 'Lead', lead._id, `Converted lead ${lead.name} to customer`, { team: lead.team });
   emit('lead:updated', lead); emit('customer:created', c);

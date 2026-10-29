@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { X, ChevronLeft, ChevronRight, Inbox, Loader2 } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Inbox, Loader2, Upload } from 'lucide-react';
 
 // Exact color palette extracted from the official EFTS logo
 export const LOGO_PALETTE = {
@@ -10,7 +10,19 @@ export const LOGO_PALETTE = {
   slate: '#969696',  // Slate gray ("TECH SOLUTIONS")
 };
 
-export const LEAD_STATUS_LIST = ['New', 'Contacted', 'Interested', 'Follow-up', 'Qualified', 'Admission in Progress', 'Converted', 'Lost'];
+export const LEAD_STATUS_LIST = [
+  'New',
+  'Contacted',
+  'Interested',
+  'Follow-up',
+  'Qualified',
+  'Admission in Progress',
+  'Converted',
+  'Lost',
+  'RNR (Ring No Response)',
+  'Busy',
+  'Switch Off',
+];
 
 export const getLogoColor = (tone = '', label = '') => {
   const l = (label || '').toLowerCase();
@@ -18,7 +30,7 @@ export const getLogoColor = (tone = '', label = '') => {
   if (t.includes('green') || l.includes('converted') || l.includes('completed') || l.includes('paid') || l.includes('admission') || l.includes('collected')) {
     return LOGO_PALETTE.green;
   }
-  if (t.includes('red') || t.includes('coral') || t.includes('orange') || t.includes('amber') || l.includes('lost') || l.includes('overdue') || l.includes('unassigned') || l.includes('unpaid') || l.includes('due')) {
+  if (t.includes('red') || t.includes('coral') || t.includes('orange') || t.includes('amber') || l.includes('lost') || l.includes('overdue') || l.includes('unassigned') || l.includes('unpaid') || l.includes('due') || l.includes('switch off') || l.includes('busy') || l.includes('rnr')) {
     return LOGO_PALETTE.coral;
   }
   if (t.includes('blue') || l.includes('new') || l.includes('sales')) {
@@ -68,6 +80,7 @@ const TONES = {
 };
 const MAP = {
   New: 'blue', Contacted: 'indigo', Interested: 'violet', 'Follow-up': 'amber', Qualified: 'teal', 'Admission in Progress': 'orange', Converted: 'green', Lost: 'red',
+  'RNR (Ring No Response)': 'amber', RNR: 'amber', Busy: 'orange', 'Switch Off': 'gray',
   High: 'red', Medium: 'amber', Low: 'gray', 'To Do': 'gray', 'In Progress': 'blue', Completed: 'green', Cancelled: 'red',
   Pending: 'amber', 'Partially Paid': 'orange', Paid: 'green', Failed: 'red', Refunded: 'gray', Success: 'green', Confirmed: 'green',
   Active: 'green', Inactive: 'red', admin: 'violet', sales: 'blue', superadmin: 'teal', Admitted: 'green', Dropped: 'red', 'Not Started': 'gray',
@@ -126,7 +139,38 @@ export function Field({ f, value, onChange, options, disabled }) {
   const common = { className: 'input', value: value ?? '', disabled, required: f.required, onChange: (e) => onChange(e.target.value), placeholder: f.placeholder };
   return (
     <div className={f.full || f.type === 'textarea' ? 'sm:col-span-2' : ''}>
-      <label className="label">{f.label}{f.required && <span className="text-red-500"> *</span>}</label>
+      <div className="flex items-center justify-between mb-1">
+        <label className="label mb-0">{f.label}{f.required && <span className="text-red-500"> *</span>}</label>
+        {f.allowFileUpload && !disabled && (
+          <label className="text-[11px] text-brand-600 hover:text-brand-700 cursor-pointer font-medium hover:underline inline-flex items-center gap-1 select-none" title="Upload address text file (.txt, .csv, .doc)">
+            <Upload className="h-3 w-3" />
+            <span>Upload file</span>
+            <input
+              type="file"
+              accept=".txt,.csv,.json,.doc,.docx"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (file.size > 2 * 1024 * 1024) {
+                  toast('File too large (max 2MB)', 'error');
+                  return;
+                }
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                  const text = String(evt.target.result || '').trim();
+                  if (text) {
+                    onChange(text);
+                    toast(`Loaded address from ${file.name}`);
+                  }
+                };
+                reader.onerror = () => toast('Failed to read file', 'error');
+                reader.readAsText(file);
+              }}
+            />
+          </label>
+        )}
+      </div>
       {f.type === 'select' ? (
         <select {...common}><option value="">{f.required ? 'Select…' : '— None —'}</option>{options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
       ) : f.type === 'textarea' ? <textarea rows={3} {...common} />

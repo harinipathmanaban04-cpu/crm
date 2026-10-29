@@ -10,12 +10,13 @@ const r = Router();
 
 const COL_MAP = {
   name: ['name', 'lead name', 'student name', 'customer name', 'full name', 'lead'],
-  phone: ['phone', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number', 'ph', 'ph no', 'ph number'],
-  email: ['email', 'email address', 'mail', 'e-mail'],
+  phone: ['phone', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number', 'ph', 'ph no', 'ph number', 'mobile no', 'contact no'],
+  email: ['email', 'email address', 'mail', 'e-mail', 'gmail', 'gmail address', 'email id', 'gmail id'],
+  address: ['address', 'actual address', 'student address', 'customer address', 'residential address', 'communication address', 'street address', 'permanent address', 'full address', 'addr'],
   company: ['company', 'company name', 'organization', 'organisation', 'org'],
   course: ['course', 'course interested', 'course interest', 'interested course', 'program', 'programme'],
   source: ['source', 'lead source', 'origin', 'referred by'],
-  location: ['location', 'city', 'place', 'address', 'area'],
+  location: ['location', 'city', 'place', 'area', 'town', 'district', 'state'],
   notes: ['notes', 'note', 'remarks', 'comment', 'comments', 'description', 'remark'],
   nextFollowUp: ['follow-up date', 'follow up date', 'followup date', 'next follow up', 'next follow-up', 'follow up', 'followup', 'next followup'],
   status: ['status', 'lead status', 'current status'],
@@ -48,13 +49,14 @@ function parseDate(v) {
 // GET /api/leads/import/template — download sample Excel template
 r.get('/template', requireRole('superadmin'), (req, res) => {
   const headers = [
-    'Lead Name', 'Phone Number', 'Email', 'Company Name',
+    'Lead Name', 'Phone Number', 'Email', 'Address', 'Company Name',
     'Course Interested', 'Lead Source', 'Location', 'Notes',
     'Follow-up Date', 'Lead Status',
   ];
-  const sample1 = ['John Doe', '9876543210', 'john@example.com', 'ABC Corp', 'Web Development', 'Website', 'Mumbai', 'Interested in weekend classes', '2025-06-15', 'New'];
-  const sample2 = ['Jane Smith', '8765432109', 'jane@example.com', '', 'Data Science', 'Referral', 'Delhi', '', '', 'Contacted'];
-  const ws = XLSX.utils.aoa_to_sheet([headers, sample1, sample2]);
+  const sample1 = ['John Doe', '9876543210', 'john@example.com', '123 Main Street, Suite 400', 'ABC Corp', 'Web Development', 'Website', 'Mumbai', 'Interested in weekend classes', '2025-06-15', 'New'];
+  const sample2 = ['Jane Smith', '8765432109', 'jane@example.com', '45 Park Avenue, Block C', '', 'Data Science', 'Referral', 'Delhi', '', '', 'Contacted'];
+  const sample3 = ['Rahul Kumar', '9123456789', 'rahul@example.com', 'No. 12 Anna Salai, Chennai', 'Tech Solutions', 'Cloud Computing', 'Direct', 'Chennai', 'Call back tomorrow', '2025-06-20', 'RNR (Ring No Response)'];
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample1, sample2, sample3]);
   ws['!cols'] = headers.map(() => ({ wch: 22 }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Leads Template');
@@ -218,9 +220,24 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
     seenInFile.add(normP);
     if (email) seenInFile.add(email);
 
-    // Parse status
+    // Parse status with support for all official statuses and common import aliases
     let status = 'New';
-    if (obj.status && LEAD_STATUSES.includes(obj.status)) status = obj.status;
+    if (obj.status) {
+      const sNorm = String(obj.status).trim();
+      const sLow = sNorm.toLowerCase();
+      if (LEAD_STATUSES.includes(sNorm)) {
+        status = sNorm;
+      } else if (sLow === 'rnr' || sLow === 'ring no response' || sLow.includes('ring no response')) {
+        status = 'RNR (Ring No Response)';
+      } else if (sLow === 'busy') {
+        status = 'Busy';
+      } else if (sLow === 'switch off' || sLow === 'switched off') {
+        status = 'Switch Off';
+      } else {
+        const matched = LEAD_STATUSES.find((x) => x.toLowerCase() === sLow);
+        if (matched) status = matched;
+      }
+    }
 
     // Match course
     let course = null;
@@ -229,7 +246,7 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
     // Parse date
     const nextFollowUp = parseDate(obj.nextFollowUp);
 
-    // Build notes from multiple fields
+    // Build notes from multiple fields (keeping address strictly distinct from notes and location)
     const notesParts = [
       obj.notes,
       obj.location ? `Location: ${obj.location}` : '',
@@ -243,6 +260,7 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
         name: obj.name.substring(0, 120),
         phone: obj.phone,
         email: email || undefined,
+        address: obj.address?.trim() || undefined,
         course: course || undefined,
         source: obj.source || 'Import',
         notes: notesParts.join('\n').substring(0, 2000) || undefined,

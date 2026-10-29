@@ -10,6 +10,7 @@ export const C = {
 export const STATUS = {
   New: ['#1D4ED8', '#DBEAFE'], Contacted: ['#4338CA', '#E0E7FF'], Interested: ['#0F766E', '#CCFBF1'], 'Follow-up': ['#A16207', '#FEF3C7'],
   Qualified: ['#7E22CE', '#F3E8FF'], 'Admission in Progress': ['#0E7490', '#CFFAFE'], Converted: ['#15803D', '#DCFCE7'], Lost: ['#B91C1C', '#FEE2E2'],
+  'RNR (Ring No Response)': ['#D97706', '#FEF3C7'], Busy: ['#EA580C', '#FFEDD5'], 'Switch Off': ['#6B7280', '#F3F4F6'],
 };
 export const PRIORITY = { Low: '#9CA3AF', Medium: '#EAAB08', High: '#DC2626' };
 export const LEAD_STATUSES = Object.keys(STATUS);

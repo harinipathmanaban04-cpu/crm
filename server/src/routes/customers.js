@@ -7,9 +7,9 @@ import { log } from '../services/activity.js';
 import { assertUnique, resolveOwner } from '../services/customer.js';
 
 const POP = [{ path: 'owner', select: 'name email' }, { path: 'team', select: 'name' }, { path: 'course', select: 'name' }, { path: 'createdBy', select: 'name' }, { path: 'history.by', select: 'name' }];
-const FIELDS = ['name', 'phone', 'email', 'course', 'notes', 'admissionStatus'];
+const FIELDS = ['name', 'phone', 'email', 'address', 'course', 'notes', 'admissionStatus'];
 const router = crud({
-  Model: Customer, kind: 'customer', populate: POP, listSelect: '-history', search: ['name', 'phone', 'email'], filters: ['course', 'admissionStatus', 'owner', 'team'],
+  Model: Customer, kind: 'customer', populate: POP, listSelect: '-history', search: ['name', 'phone', 'email', 'address'], filters: ['course', 'admissionStatus', 'owner', 'team'],
   create: {
     build: async (req) => {
       await assertUnique(req.body);

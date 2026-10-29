@@ -4,7 +4,7 @@ const { Schema, model } = mongoose;
 const ref = (r, o = {}) => ({ type: Schema.Types.ObjectId, ref: r, default: null, ...o });
 const T = { timestamps: true };
 
-export const LEAD_STATUSES = ['New', 'Contacted', 'Interested', 'Follow-up', 'Qualified', 'Admission in Progress', 'Converted', 'Lost'];
+export const LEAD_STATUSES = ['New', 'Contacted', 'Interested', 'Follow-up', 'Qualified', 'Admission in Progress', 'Converted', 'Lost', 'RNR (Ring No Response)', 'Busy', 'Switch Off'];
 export const PRIORITIES = ['Low', 'Medium', 'High'];
 export const TASK_STATUSES = ['To Do', 'In Progress', 'Completed', 'Cancelled'];
 export const ADMISSION_STAGES = ['Enquiry', 'Counselling', 'Registered', 'Enrolled', 'Completed', 'Dropped'];
@@ -112,6 +112,7 @@ const leadSchema = new Schema({
   name: { type: String, required: true, trim: true, maxlength: 120 },
   phone: { type: String, required: true, trim: true, match: [/^[+\d][\d\s-]{6,}$/, 'Invalid phone number'] },
   email: { type: String, trim: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Invalid email'] },
+  address: { type: String, trim: true, maxlength: 500 },
   course: ref('Course'),
   source: { type: String, trim: true, default: 'Direct' },
   team: ref('Team', { index: true }),
@@ -126,6 +127,10 @@ const leadSchema = new Schema({
   history: [{ type: { type: String }, from: ref('User'), to: ref('User'), team: ref('Team'), by: ref('User'), at: { type: Date, default: Date.now } }],
   followUps: [{ note: String, date: { type: Date, default: Date.now }, by: ref('User'), next: Date }],
 }, T);
+leadSchema.pre('validate', function () {
+  if (this.email === '') this.email = undefined;
+  if (this.address === '') this.address = undefined;
+});
 leadSchema.index({ team: 1, status: 1 });
 export const Lead = model('Lead', leadSchema);
 
@@ -149,6 +154,7 @@ const customerSchema = new Schema({
   phoneNorm: { type: String, unique: true, sparse: true },
   email: { type: String, trim: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Invalid email'] },
   emailNorm: { type: String, unique: true, sparse: true },
+  address: { type: String, trim: true, maxlength: 500 },
   course: ref('Course'),
   owner: ref('User', { index: true }),
   team: ref('Team', { index: true }),
@@ -161,6 +167,7 @@ const customerSchema = new Schema({
 customerSchema.pre('validate', function () {
   this.phoneNorm = normPhone(this.phone) || undefined;
   this.emailNorm = normEmail(this.email) || undefined;
+  if (this.address === '') this.address = undefined;
 });
 export const Customer = model('Customer', customerSchema);
 
