@@ -8,7 +8,7 @@ import api, { errMsg } from '../api';
 import { useFetch } from '../useFetch';
 import { EV, useLive } from '../realtime';
 import { Avatar, Button, Card, Chip, ErrorState, Field, InfoRow, Loading, Pill, PriorityDot, SectionTitle, StatusBadge } from '../ui';
-import { C, LEAD_STATUSES, PRIORITIES, STATUS, alt } from '../theme';
+import { C, LEAD_STATUSES, PRIORITIES, STATUS, dedupeStatuses, alt } from '../theme';
 import { addDays, dueState, fmtDate, fmtDateTime, timeAgo } from '../utils/format';
 import { mailUrl, telUrl, waUrl } from '../utils/urls';
 import { DEFAULT_COUNTRY_CODE } from '../config';
@@ -111,7 +111,10 @@ export default function LeadDetail({ route, navigation }) {
         <SectionTitle>Update lead status</SectionTitle>
         <Card accent={alt(2)}>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: 8 }}>
-            {LEAD_STATUSES.map((s) => <Chip key={s} label={s} active={lead.status === s} color={STATUS[s][0]} onPress={() => setStatus(s)} />)}
+            {dedupeStatuses(LEAD_STATUSES).map((s) => {
+              const active = !!lead.status && lead.status.trim().toLowerCase() === s.trim().toLowerCase();
+              return <Chip key={s} label={s} active={active} color={STATUS[s]?.[0]} onPress={() => setStatus(s)} />;
+            })}
           </View>
           <Text style={{ fontSize: 12, fontWeight: '600', color: C.sub, marginTop: 14, marginBottom: 8 }}>Priority</Text>
           <View style={{ flexDirection: 'row' }}>{PRIORITIES.map((p) => <Chip key={p} label={p} active={lead.priority === p} onPress={() => setPriority(p)} />)}</View>

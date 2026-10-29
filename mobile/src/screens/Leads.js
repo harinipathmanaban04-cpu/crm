@@ -7,7 +7,7 @@ import api, { errMsg } from '../api';
 import { EV, useLive } from '../realtime';
 import { Avatar, Card, Chip, Empty, ErrorState, Loading, Pill, PriorityDot, SearchBox, StatusBadge } from '../ui';
 import { ScreenHeader } from '../drawer';
-import { C, LEAD_STATUSES, alt } from '../theme';
+import { C, LEAD_STATUSES, dedupeStatuses, alt } from '../theme';
 import { dueState, fmtDate } from '../utils/format';
 import { telUrl } from '../utils/urls';
 
@@ -18,8 +18,16 @@ export default function Leads({ navigation, route }) {
   const [items, setItems] = useState([]); const [page, setPage] = useState(1); const [pages, setPages] = useState(1); const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true); const [more, setMore] = useState(false); const [refreshing, setRefreshing] = useState(false); const [error, setError] = useState('');
   const reqId = useRef(0);
+  const statusFilters = dedupeStatuses(LEAD_STATUSES);
 
-  useEffect(() => { if (route.params?.status !== undefined) { setStatus(route.params.status); navigation.setParams({ status: undefined }); } }, [route.params?.status]); // eslint-disable-line
+  useEffect(() => {
+    if (route.params?.status !== undefined) {
+      const raw = route.params.status;
+      const matched = statusFilters.find((s) => s.trim().toLowerCase() === String(raw).trim().toLowerCase());
+      setStatus(matched !== undefined ? matched : raw);
+      navigation.setParams({ status: undefined });
+    }
+  }, [route.params?.status]); // eslint-disable-line
   useEffect(() => { const t = setTimeout(() => setDq(q.trim()), 350); return () => clearTimeout(t); }, [q]);
 
   const load = useCallback(async (p = 1, mode = 'initial') => {
@@ -64,7 +72,10 @@ export default function Leads({ navigation, route }) {
         <SearchBox value={q} onChangeText={setQ} placeholder="Search name, phone, email, ID" style={{ marginHorizontal: 16, marginBottom: 10 }} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 12 }}>
           <Chip label="All" active={!status} onPress={() => setStatus('')} />
-          {LEAD_STATUSES.map((s) => <Chip key={s} label={s} active={status === s} onPress={() => setStatus(s)} />)}
+          {statusFilters.map((s) => {
+            const active = !!status && status.trim().toLowerCase() === s.trim().toLowerCase();
+            return <Chip key={s} label={s} active={active} onPress={() => setStatus(s)} />;
+          })}
         </ScrollView>
       </ScreenHeader>
       {loading ? <Loading /> : error && !items.length ? <ErrorState message={error} onRetry={() => load(1)} /> : (

@@ -1,3 +1,6 @@
+import { dedupeStatuses } from './utils/format.js';
+export { dedupeStatuses };
+
 // Brand palette copied from the web CRM (client/tailwind.config.js: brand-50 … brand-700) + Tailwind grays.
 export const C = {
   // Teal + coral palette copied from client/tailwind.config.js (matches the Eco Friendly Tech Solutions logo)
@@ -7,15 +10,31 @@ export const C = {
   bg: '#F9FAFB', card: '#FFFFFF', border: '#E5E7EB', text: '#111827', sub: '#6B7280', muted: '#9CA3AF',
   green: '#16A34A', greenBg: '#DCFCE7', red: '#DC2626', redBg: '#FEE2E2', blue: '#2563EB', blueBg: '#DBEAFE', amberBg: '#FFE1DA',
 };
-export const STATUS = {
+
+const BASE_STATUS = {
   New: ['#1D4ED8', '#DBEAFE'], Contacted: ['#4338CA', '#E0E7FF'], Interested: ['#0F766E', '#CCFBF1'], 'Follow-up': ['#A16207', '#FEF3C7'],
   Qualified: ['#7E22CE', '#F3E8FF'], 'Admission in Progress': ['#0E7490', '#CFFAFE'], Converted: ['#15803D', '#DCFCE7'], Lost: ['#B91C1C', '#FEE2E2'],
   'RNR (Ring No Response)': ['#D97706', '#FEF3C7'], Busy: ['#EA580C', '#FFEDD5'], 'Switch Off': ['#6B7280', '#F3F4F6'],
-  'Not Reachable': ['#C2410C', '#FFEDD5'], 'Not reachable': ['#C2410C', '#FFEDD5'],
-  'Not Interested': ['#B91C1C', '#FEE2E2'], 'Not interested': ['#B91C1C', '#FEE2E2'],
+  'Not Reachable': ['#C2410C', '#FFEDD5'],
+  'Not Interested': ['#B91C1C', '#FEE2E2'],
 };
+
+// Case-insensitive & trimmed proxy lookup so styling never breaks on casing variations,
+// while Object.keys(STATUS) returns only the 13 canonical unique statuses.
+export const STATUS = new Proxy(BASE_STATUS, {
+  get(target, prop) {
+    if (prop in target) return target[prop];
+    if (typeof prop === 'string') {
+      const norm = prop.trim().toLowerCase();
+      const match = Object.keys(target).find((k) => k.toLowerCase() === norm);
+      if (match) return target[match];
+    }
+    return target[prop];
+  },
+});
+
 export const PRIORITY = { Low: '#9CA3AF', Medium: '#EAAB08', High: '#DC2626' };
-export const LEAD_STATUSES = Object.keys(STATUS);
+export const LEAD_STATUSES = dedupeStatuses(Object.keys(BASE_STATUS));
 export const PRIORITIES = ['Low', 'Medium', 'High'];
 export const TASK_STATUSES = ['To Do', 'In Progress', 'Completed', 'Cancelled'];
 // Same rule as the website's Teams page: card top border alternates teal / coral by position (client LOGO_PALETTE).

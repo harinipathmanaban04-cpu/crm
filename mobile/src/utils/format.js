@@ -20,3 +20,24 @@ export const addDays = (n, hour = 10) => { const d = new Date(); d.setDate(d.get
 export const initials = (n = '?') => n.trim().split(/\s+/).slice(0, 2).map((x) => x[0]).join('').toUpperCase();
 export const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 export const toIsoDate = (d) => { const x = new Date(d); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+
+/**
+ * Deduplicate and normalize a list of statuses.
+ * Handles case differences and leading/trailing spaces while preserving original display labels.
+ */
+export function dedupeStatuses(statuses) {
+  if (!Array.isArray(statuses)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const s of statuses) {
+    if (typeof s !== 'string') continue;
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(trimmed);
+    }
+  }
+  return result;
+}

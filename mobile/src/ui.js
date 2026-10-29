@@ -99,8 +99,21 @@ export function Sheet({ visible, onClose, title, children }) {
 /** Dropdown: tap to open a searchable list. options = [{ value, label }] */
 export function SelectField({ label, value, options = [], onChange, placeholder = 'Select', allowClear, error, style }) {
   const [open, setOpen] = useState(false); const [q, setQ] = useState('');
-  const cur = options.find((o) => String(o.value) === String(value));
-  const list = q ? options.filter((o) => o.label.toLowerCase().includes(q.toLowerCase())) : options;
+  const dedupedOptions = (() => {
+    const seen = new Set();
+    const res = [];
+    for (const o of options) {
+      if (!o) continue;
+      const key = String(o.value ?? o.label ?? '').trim().toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        res.push(o);
+      }
+    }
+    return res;
+  })();
+  const cur = dedupedOptions.find((o) => String(o.value).trim().toLowerCase() === String(value).trim().toLowerCase());
+  const list = q ? dedupedOptions.filter((o) => String(o.label || '').toLowerCase().includes(q.toLowerCase())) : dedupedOptions;
   const close = () => { setOpen(false); setQ(''); };
   return (
     <View style={[{ marginBottom: 14 }, style]}>
@@ -111,10 +124,10 @@ export function SelectField({ label, value, options = [], onChange, placeholder 
       </Pressable>
       {error ? <Text style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{error}</Text> : null}
       <Sheet visible={open} onClose={close} title={label || placeholder}>
-        {options.length > 8 ? <SearchBox value={q} onChangeText={setQ} placeholder="Search…" style={{ marginBottom: 10 }} /> : null}
+        {dedupedOptions.length > 8 ? <SearchBox value={q} onChangeText={setQ} placeholder="Search…" style={{ marginBottom: 10 }} /> : null}
         {allowClear && value ? <Pressable onPress={() => { onChange(''); close(); }} style={s.opt}><Text style={{ color: C.red, fontSize: 15 }}>Clear selection</Text></Pressable> : null}
         {list.length === 0 ? <Text style={{ color: C.muted, textAlign: 'center', padding: 16 }}>No options</Text> : null}
-        {list.slice(0, 150).map((o) => { const on = String(o.value) === String(value); return (
+        {list.slice(0, 150).map((o) => { const on = String(o.value).trim().toLowerCase() === String(value).trim().toLowerCase(); return (
           <Pressable key={String(o.value)} onPress={() => { onChange(o.value); close(); }} style={[s.opt, on && { backgroundColor: C.brand50 }]}>
             <Text style={{ flex: 1, fontSize: 15, color: C.text, fontWeight: on ? '700' : '400' }}>{o.label}</Text>{on ? <Ionicons name="checkmark" size={18} color={C.brand700} /> : null}
           </Pressable>); })}
