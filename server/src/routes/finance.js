@@ -458,11 +458,12 @@ R.put('/invoices/:id', requireRole(...STAFF), async (req, res) => {
         const isSuccess = r.status === 'Paid' || r.status === 'Success';
         const cleanMode = VALID_METHODS.includes(r.mode) ? r.mode : (inv.paymentMode || 'UPI');
         let pId = r.paymentId && isValidObjectId(r.paymentId) ? r.paymentId : null;
-        if (!pId) {
-          const pDoc = await Payment.create({
+        let pDoc = pId ? await Payment.findById(pId) : null;
+        if (!pDoc) {
+          pDoc = await Payment.create({
             invoice: inv._id,
             customer: inv.customer || null,
-            description: r.description || `${inv.programName} – EMI ${r.emiNumber || (idx + 1)} - ${cleanMode}`,
+            description: r.description || `${inv.programName || 'Internship'} – EMI ${r.emiNumber || (idx + 1)} - ${cleanMode}`,
             amount: amt,
             method: cleanMode,
             emiNumber: String(r.emiNumber || (idx + 1)),
@@ -473,19 +474,17 @@ R.put('/invoices/:id', requireRole(...STAFF), async (req, res) => {
             team: inv.team,
             recordedBy: req.user._id,
           });
-          pId = pDoc._id;
         } else {
-          await Payment.findByIdAndUpdate(pId, {
-            description: r.description,
-            amount: amt,
-            method: cleanMode,
-            emiNumber: String(r.emiNumber || (idx + 1)),
-            txnRef: r.txnRef || '',
-            paymentDate: r.date ? new Date(r.date) : new Date(),
-            status: isSuccess ? 'Success' : (r.status || 'Pending'),
-          });
+          pDoc.description = r.description || pDoc.description;
+          pDoc.amount = amt;
+          pDoc.method = cleanMode;
+          pDoc.emiNumber = String(r.emiNumber || (idx + 1));
+          pDoc.txnRef = r.txnRef || '';
+          pDoc.paymentDate = r.date ? new Date(r.date) : new Date();
+          pDoc.status = isSuccess ? 'Success' : (r.status || 'Pending');
+          await pDoc.save();
         }
-        keptPaymentIds.push(pId);
+        keptPaymentIds.push(pDoc._id);
         updatedRows.push({
           sNo: r.sNo || idx + 1,
           description: r.description,
@@ -495,7 +494,7 @@ R.put('/invoices/:id', requireRole(...STAFF), async (req, res) => {
           amount: amt,
           status: isSuccess ? 'Paid' : (r.status || 'Pending'),
           txnRef: r.txnRef || '',
-          paymentId: pId,
+          paymentId: pDoc._id,
         });
       }
     }
@@ -510,16 +509,11 @@ R.put('/invoices/:id', requireRole(...STAFF), async (req, res) => {
   }
 
   await inv.save();
-  await recompute(inv._id);
-
-  if (req.body.status && validStatuses.includes(req.body.status)) {
-    inv.status = req.body.status;
-    await inv.save();
-  }
+  const refreshed = await recompute(inv._id);
 
   invalidateInvoicePdfCache(inv._id);
   await log(req.user, 'invoice.updated', 'Invoice', inv._id, `Updated invoice ${inv.invoiceNo}`, { team: inv.team });
-  emit('payment:updated', inv);
+  emit('payment:updated', refreshed || inv);
   res.json(await Invoice.findById(inv._id).populate(IPOP));
 });
 

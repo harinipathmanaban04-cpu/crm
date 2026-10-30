@@ -232,6 +232,22 @@ export default function NewInvoiceModal({ onClose, onSuccess, initialInvoice = n
           if (inv.taxRate != null && Number(inv.taxRate) >= 0) {
             setTaxRate(Number(inv.taxRate));
           }
+          setFormData((prev) => ({
+            ...prev,
+            invoiceNo: inv.invoiceNo || prev.invoiceNo,
+            customerName: inv.customerName || inv.customer?.name || prev.customerName,
+            customerEmail: inv.customerEmail || inv.customer?.email || prev.customerEmail,
+            customerPhone: inv.customerPhone || inv.customer?.phone || prev.customerPhone,
+            programName: inv.programName || inv.course?.name || prev.programName,
+            mode: inv.mode || prev.mode || 'Online',
+            description: inv.description || prev.description,
+            paymentMode: inv.paymentMode || prev.paymentMode,
+            paymentPlan: inv.paymentPlan || prev.paymentPlan,
+            totalInstallments: inv.totalInstallments || prev.totalInstallments,
+            registrationFee: inv.registrationFee != null ? Number(inv.registrationFee) : prev.registrationFee,
+            total: price > 0 ? price : prev.total,
+            notes: inv.notes || prev.notes,
+          }));
         }
       }).catch((e) => console.warn('Failed to load invoice fresh details:', e.message));
     }

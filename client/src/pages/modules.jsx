@@ -219,7 +219,12 @@ function LeadDetail({ id, onClose, hidden = false }) {
             })}
             <div><p className="text-xs font-medium text-gray-500 mb-0.5">Status</p><Badge>{l.status}</Badge></div>
           </div>
-          {l.notes && <div><p className="text-xs font-medium text-gray-500 mb-0.5">Notes</p><p className="rounded-lg bg-gray-50 p-3 text-gray-800 break-words">{l.notes}</p></div>}
+          {(() => {
+            const cleanNotes = l.notes?.replace(/(?:^|\n)\s*Location:\s*[^\n\r]+/gi, '').trim();
+            return cleanNotes ? (
+              <div><p className="text-xs font-medium text-gray-500 mb-0.5">Notes</p><p className="rounded-lg bg-gray-50 p-3 text-gray-800 break-words">{cleanNotes}</p></div>
+            ) : null;
+          })()}
           <div><h4 className="mb-2 font-semibold">Assignment history</h4>{l.history?.length ? <ul className="space-y-1 text-gray-600">{[...l.history].reverse().map((h, i) => <li key={i}>{fmtDT(h.at)} — {h.type}{h.from ? ` from ${nm(h.from)}` : ''}{h.to ? ` to ${nm(h.to)}` : ''} <span className="text-gray-400">by {nm(h.by)}</span></li>)}</ul> : <p className="text-gray-400">None</p>}</div>
           <div><h4 className="mb-2 font-semibold">Follow-up activity</h4>{l.followUps?.length ? <ul className="space-y-1 text-gray-600">{[...l.followUps].reverse().map((h, i) => <li key={i}>{fmtDT(h.date)} — {h.note} <span className="text-gray-400">by {nm(h.by)}</span></li>)}</ul> : <p className="text-gray-400">No follow-ups logged</p>}</div>
         </div>

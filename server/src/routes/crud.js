@@ -23,7 +23,7 @@ export function crud(o) {
     }
     if (o.extra) conds.push(...o.extra(req).filter(Boolean));
     const filter = { $and: conds };
-    const page = Math.max(1, parseInt(q.page) || 1); const limit = Math.min(100, parseInt(q.limit) || 15);
+    const page = Math.max(1, parseInt(q.page) || 1); const limit = Math.min(100, parseInt(q.limit) || 20);
     let query = M.find(filter).sort(o.sort || '-createdAt').skip((page - 1) * limit).limit(limit);
     if (o.listSelect) query = query.select(o.listSelect);
     if (o.populate) query = query.populate(o.populate);

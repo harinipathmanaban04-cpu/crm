@@ -113,6 +113,7 @@ const leadSchema = new Schema({
   phone: { type: String, required: true, trim: true, match: [/^[+\d][\d\s-]{6,}$/, 'Invalid phone number'] },
   email: { type: String, trim: true, lowercase: true, match: [/^\S+@\S+\.\S+$/, 'Invalid email'] },
   address: { type: String, trim: true, maxlength: 500 },
+  location: { type: String, trim: true, maxlength: 200 },
   course: ref('Course'),
   source: { type: String, trim: true, default: 'Direct' },
   team: ref('Team', { index: true }),
@@ -134,6 +135,32 @@ leadSchema.pre('validate', function () {
 });
 leadSchema.index({ team: 1, status: 1 });
 export const Lead = model('Lead', leadSchema);
+
+export async function migrateLegacyLeadLocations() {
+  try {
+    const leadsWithLocNotes = await Lead.find({
+      notes: /Location:\s*/i,
+      $or: [{ location: { $exists: false } }, { location: null }, { location: '' }],
+    }).limit(500);
+
+    for (const lead of leadsWithLocNotes) {
+      const match = lead.notes?.match(/(?:^|\n)\s*Location:\s*([^\n\r]+)/i);
+      if (match && match[1]) {
+        const extractedLoc = match[1].trim();
+        const cleanedNotes = lead.notes
+          .replace(/(?:^|\n)\s*Location:\s*[^\n\r]+/gi, '')
+          .replace(/^\s+|\s+$/g, '')
+          .replace(/\n{3,}/g, '\n\n');
+        await Lead.updateOne(
+          { _id: lead._id },
+          { $set: { location: extractedLoc, notes: cleanedNotes } }
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('[migrateLegacyLeadLocations] notice:', err.message);
+  }
+}
 
 const leadRemovalSchema = new Schema({
   leadId: ref('Lead', { required: true, index: true }),
