@@ -4,7 +4,7 @@ import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { useLookups } from '../lookups.jsx';
 import { Badge, Spinner, fmt, inr, toast } from '../ui.jsx';
-import { X, Plus, Trash2, RefreshCw, Calendar, CreditCard, User, BookOpen, FileText, CheckCircle2, Globe, Building2 } from 'lucide-react';
+import { X, Plus, Trash2, RefreshCw, Calendar, CreditCard, User, BookOpen, FileText, CheckCircle2, Globe, Building2, Tag, Percent } from 'lucide-react';
 
 export function amountToIndianWords(num) {
   num = Math.round(Number(num) || 0);
@@ -51,14 +51,42 @@ export function amountToIndianWords(num) {
   return (words.trim() + ' Only').replace(/\s+/g, ' ');
 }
 
+export function resolveInitialPrice(inv) {
+  if (!inv) return 20000;
+  if (inv.unitPrice != null && Number(inv.unitPrice) > 0) {
+    return Number(inv.unitPrice);
+  }
+  if (inv.total != null && Number(inv.total) > 0) {
+    return Number(inv.total);
+  }
+  if (inv.totalInternshipFee != null && Number(inv.totalInternshipFee) > 0) {
+    return Number(inv.totalInternshipFee);
+  }
+  if (Array.isArray(inv.paymentRows) && inv.paymentRows.length > 0) {
+    const sum = inv.paymentRows.reduce((acc, r) => acc + (Number(r.amount) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  return inv.mode === 'Offline' ? 30000 : 20000;
+}
+
 const PAYMENT_MODES = ['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other'];
 const PAYMENT_PLANS = ['One-Time Payment', 'Monthly EMI', 'Custom Installments'];
 const PAYMENT_STATUSES = ['Pending', 'Partially Paid', 'Paid', 'Overdue', 'Cancelled'];
 
-export default function NewInvoiceModal({ onClose, onSuccess }) {
+export default function NewInvoiceModal({ onClose, onSuccess, initialInvoice = null }) {
   const nav = useNavigate();
   const { user } = useAuth();
   const { customers, courses } = useLookups();
+
+  const isEdit = Boolean(initialInvoice && initialInvoice._id);
+  const canEdit = user?.role === 'superadmin' || user?.role === 'admin';
+
+  useEffect(() => {
+    if (isEdit && !canEdit) {
+      toast('You do not have permission to edit invoices', 'error');
+      onClose();
+    }
+  }, [isEdit, canEdit, onClose]);
 
   const [activeTab, setActiveTab] = useState('form'); // 'form' | 'preview'
   const [loadingNumber, setLoadingNumber] = useState(false);
@@ -66,50 +94,92 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false);
 
   // Form state
-  const [selectedCustomer, setSelectedCustomer] = useState('');
-  const [isManualCustomer, setIsManualCustomer] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState(
+    initialInvoice?.customer?._id || (typeof initialInvoice?.customer === 'string' ? initialInvoice.customer : '')
+  );
+  const [isManualCustomer, setIsManualCustomer] = useState(
+    Boolean(initialInvoice?.customerName && !initialInvoice?.customer)
+  );
   const [customerInfo, setCustomerInfo] = useState(null);
 
-  // Default mode: Online (Total: 20000, Reg: 2000)
-  const [formData, setFormData] = useState({
-    invoiceNo: '',
-    invoiceDate: new Date().toISOString().split('T')[0],
-    dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    paymentDate: new Date().toISOString().split('T')[0],
-    customerName: '',
-    customerEmail: '',
-    customerPhone: '',
-    courseId: '',
-    admissionId: '',
-    programName: '',
-    mode: 'Online',
-    registrationFee: 2000,
-    total: 20000,
-    description: '',
-    paymentMode: 'UPI',
-    paymentPlan: 'One-Time Payment',
-    totalInstallments: 1,
-    statusOverride: '',
-    notes: '',
+  // Itemized Pricing & Calculations
+  const [quantity, setQuantity] = useState(() => {
+    return initialInvoice?.quantity != null && Number(initialInvoice.quantity) > 0
+      ? Number(initialInvoice.quantity)
+      : 1;
+  });
+  const [unitPrice, setUnitPrice] = useState(() => resolveInitialPrice(initialInvoice));
+  const [discount, setDiscount] = useState(() => {
+    return initialInvoice?.discount != null ? Number(initialInvoice.discount) : 0;
+  });
+  const [taxRate, setTaxRate] = useState(() => {
+    return initialInvoice?.taxRate != null ? Number(initialInvoice.taxRate) : 0;
   });
 
-  // Dynamic payment rows (defaults to Online registration of 2,000)
-  const [paymentRows, setPaymentRows] = useState([
-    {
-      id: 1,
-      sNo: 1,
-      description: 'Internship Program – Registration (Online)',
-      date: new Date().toISOString().split('T')[0],
-      emiNumber: '1',
-      mode: 'UPI',
-      amount: 2000,
-      status: 'Paid',
-      txnRef: '',
-    },
-  ]);
+  const [formData, setFormData] = useState({
+    invoiceNo: initialInvoice?.invoiceNo || '',
+    invoiceDate: initialInvoice?.invoiceDate
+      ? new Date(initialInvoice.invoiceDate).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0],
+    dueDate: initialInvoice?.dueDate
+      ? new Date(initialInvoice.dueDate).toISOString().split('T')[0]
+      : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    paymentDate: initialInvoice?.paymentDate
+      ? new Date(initialInvoice.paymentDate).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0],
+    customerName: initialInvoice?.customerName || initialInvoice?.customer?.name || '',
+    customerEmail: initialInvoice?.customerEmail || initialInvoice?.customer?.email || '',
+    customerPhone: initialInvoice?.customerPhone || initialInvoice?.customer?.phone || '',
+    courseId: initialInvoice?.course?._id || (typeof initialInvoice?.course === 'string' ? initialInvoice.course : ''),
+    admissionId: initialInvoice?.admission?._id || (typeof initialInvoice?.admission === 'string' ? initialInvoice.admission : ''),
+    programName: initialInvoice?.programName || initialInvoice?.course?.name || '',
+    mode: initialInvoice?.mode || 'Online',
+    registrationFee: initialInvoice?.registrationFee != null
+      ? Number(initialInvoice.registrationFee)
+      : (initialInvoice?.mode === 'Offline' ? 3000 : 2000),
+    total: resolveInitialPrice(initialInvoice),
+    description: initialInvoice?.description || '',
+    paymentMode: initialInvoice?.paymentMode || 'UPI',
+    paymentPlan: initialInvoice?.paymentPlan || 'One-Time Payment',
+    totalInstallments: initialInvoice?.totalInstallments != null ? Number(initialInvoice.totalInstallments) : 1,
+    statusOverride: initialInvoice?.status || '',
+    notes: initialInvoice?.notes || '',
+  });
 
-  // Fetch sequential invoice number
+  // Dynamic payment rows
+  const [paymentRows, setPaymentRows] = useState(() => {
+    if (initialInvoice?.paymentRows && initialInvoice.paymentRows.length > 0) {
+      return initialInvoice.paymentRows.map((r, i) => ({
+        id: r._id || Date.now() + i,
+        paymentId: r.paymentId || r._id,
+        sNo: r.sNo || i + 1,
+        description: r.description || `${initialInvoice.programName || 'Internship'} – EMI ${r.emiNumber || (i + 1)}`,
+        date: r.date ? new Date(r.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        emiNumber: String(r.emiNumber || (i + 1)),
+        mode: r.mode || initialInvoice.paymentMode || 'UPI',
+        amount: Number(r.amount) || 0,
+        status: r.status || 'Paid',
+        txnRef: r.txnRef || '',
+      }));
+    }
+    return [
+      {
+        id: 1,
+        sNo: 1,
+        description: 'Internship Program – Registration (Online)',
+        date: new Date().toISOString().split('T')[0],
+        emiNumber: '1',
+        mode: 'UPI',
+        amount: 2000,
+        status: 'Paid',
+        txnRef: '',
+      },
+    ];
+  });
+
+  // Sequential invoice number (only for new invoices)
   const fetchInvoiceNumber = async () => {
+    if (isEdit) return;
     setLoadingNumber(true);
     try {
       const res = await api.get('/invoices/next-number');
@@ -126,8 +196,46 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
   };
 
   useEffect(() => {
-    fetchInvoiceNumber();
-  }, []);
+    if (!isEdit) {
+      fetchInvoiceNumber();
+    } else if (initialInvoice?._id) {
+      // Refresh full invoice in case some fields weren't in table row
+      api.get(`/invoices/${initialInvoice._id}`).then((res) => {
+        const inv = res.data;
+        if (inv) {
+          if (inv.paymentRows && inv.paymentRows.length > 0) {
+            setPaymentRows(
+              inv.paymentRows.map((r, i) => ({
+                id: r._id || Date.now() + i,
+                paymentId: r.paymentId || r._id,
+                sNo: r.sNo || i + 1,
+                description: r.description || '',
+                date: r.date ? new Date(r.date).toISOString().split('T')[0] : '',
+                emiNumber: String(r.emiNumber || (i + 1)),
+                mode: r.mode || 'UPI',
+                amount: Number(r.amount) || 0,
+                status: r.status || 'Paid',
+                txnRef: r.txnRef || '',
+              }))
+            );
+          }
+          if (inv.quantity != null && Number(inv.quantity) > 0) {
+            setQuantity(Number(inv.quantity));
+          }
+          const price = resolveInitialPrice(inv);
+          if (price > 0) {
+            setUnitPrice(price);
+          }
+          if (inv.discount != null && Number(inv.discount) >= 0) {
+            setDiscount(Number(inv.discount));
+          }
+          if (inv.taxRate != null && Number(inv.taxRate) >= 0) {
+            setTaxRate(Number(inv.taxRate));
+          }
+        }
+      }).catch((e) => console.warn('Failed to load invoice fresh details:', e.message));
+    }
+  }, [isEdit, initialInvoice?._id]);
 
   // Online / Offline Mode Switcher
   const handleModeSelect = (newMode) => {
@@ -136,6 +244,11 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
     const regFee = isOnline ? 2000 : 3000;
     const progName = formData.programName || 'Internship Program';
     const desc = `${progName} – Registration (${newMode})`;
+
+    setUnitPrice(totalFee);
+    setQuantity(1);
+    setDiscount(0);
+    setTaxRate(0);
 
     setFormData((prev) => ({
       ...prev,
@@ -147,17 +260,19 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
 
     setPaymentRows((prev) => {
       if (!prev || prev.length === 0) {
-        return [{
-          id: 1,
-          sNo: 1,
-          description: desc,
-          date: formData.paymentDate || new Date().toISOString().split('T')[0],
-          emiNumber: '1',
-          mode: formData.paymentMode || 'UPI',
-          amount: regFee,
-          status: 'Paid',
-          txnRef: '',
-        }];
+        return [
+          {
+            id: 1,
+            sNo: 1,
+            description: desc,
+            date: formData.paymentDate || new Date().toISOString().split('T')[0],
+            emiNumber: '1',
+            mode: formData.paymentMode || 'UPI',
+            amount: regFee,
+            status: 'Paid',
+            txnRef: '',
+          },
+        ];
       }
       return prev.map((r, i) =>
         i === 0
@@ -187,11 +302,16 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
       setCustomerInfo(d);
 
       const progName = d.programName || (courses.find((c) => c._id === d.course?._id)?.name) || '';
-      const mode = d.admission?.mode === 'Offline' ? 'Offline' : 'Online';
+      const mode = d.admission?.mode === 'Offline' ? 'Offline' : (formData.mode || 'Online');
       const isOnline = mode === 'Online';
       const totalFee = isOnline ? 20000 : 30000;
       const regFee = isOnline ? 2000 : 3000;
       const desc = `${progName || 'Internship'} – Registration (${mode})`;
+
+      setUnitPrice(totalFee);
+      setQuantity(1);
+      setDiscount(0);
+      setTaxRate(0);
 
       setFormData((prev) => ({
         ...prev,
@@ -207,19 +327,21 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
         description: desc,
       }));
 
-      setPaymentRows([
-        {
-          id: 1,
-          sNo: 1,
-          description: desc,
-          date: new Date().toISOString().split('T')[0],
-          emiNumber: '1',
-          mode: formData.paymentMode || 'UPI',
-          amount: regFee,
-          status: 'Paid',
-          txnRef: '',
-        },
-      ]);
+      if (!isEdit) {
+        setPaymentRows([
+          {
+            id: 1,
+            sNo: 1,
+            description: desc,
+            date: new Date().toISOString().split('T')[0],
+            emiNumber: '1',
+            mode: formData.paymentMode || 'UPI',
+            amount: regFee,
+            status: 'Paid',
+            txnRef: '',
+          },
+        ]);
+      }
     } catch (e) {
       toast(errMsg(e), 'error');
     } finally {
@@ -233,9 +355,14 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
     if (found) {
       const progName = found.name;
       const isOnline = formData.mode === 'Online';
-      const fee = isOnline ? 20000 : 30000;
+      const fee = found.fee || (isOnline ? 20000 : 30000);
       const reg = isOnline ? 2000 : 3000;
       const desc = `${progName} – Registration (${formData.mode})`;
+
+      setUnitPrice(fee);
+      setQuantity(1);
+      setDiscount(0);
+      setTaxRate(0);
 
       setFormData((prev) => ({
         ...prev,
@@ -254,6 +381,18 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
     }
   };
 
+  // Calculations
+  const qtyNum = Math.max(1, Number(quantity) || 1);
+  const unitPriceNum = Math.max(0, Number(unitPrice) || 0);
+  const subtotal = Math.round(qtyNum * unitPriceNum);
+  const discountAmount = Math.min(subtotal, Math.max(0, Number(discount) || 0));
+  const discountRate = subtotal > 0 ? Math.round((discountAmount / subtotal) * 100) : 0;
+  const taxableAmount = Math.max(0, subtotal - discountAmount);
+  const taxRateNum = Math.max(0, Number(taxRate) || 0);
+  const taxAmount = Math.round(taxableAmount * (taxRateNum / 100));
+  const calculatedGrandTotal = Math.max(0, taxableAmount + taxAmount);
+  const totalAmount = calculatedGrandTotal > 0 ? calculatedGrandTotal : (unitPriceNum > 0 ? unitPriceNum : 0);
+
   // Auto-generate EMI schedule when Monthly EMI selected or installments changed
   const generateEmiSchedule = (installmentsCount, totalFee, pMode, prog) => {
     const count = Math.max(1, parseInt(installmentsCount) || 2);
@@ -261,7 +400,8 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
     const mode = pMode || formData.paymentMode || 'UPI';
     const isOnline = formData.mode === 'Online';
     const regFee = isOnline ? 2000 : 3000;
-    const remainingToSplit = Math.max(0, (Number(totalFee) || 0) - regFee);
+    const effectiveFee = Number(totalFee) || totalAmount || 20000;
+    const remainingToSplit = Math.max(0, effectiveFee - regFee);
     const amountPerRemaining = count > 1 ? Math.round(remainingToSplit / (count - 1)) : 0;
 
     const startDate = formData.paymentDate ? new Date(formData.paymentDate) : new Date();
@@ -298,9 +438,6 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
     }
     setPaymentRows(newRows);
   };
-
-  // Calculations
-  const totalAmount = Number(formData.total) || 0;
 
   const totalReceived = useMemo(() => {
     return paymentRows.reduce((acc, row) => {
@@ -371,21 +508,39 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
     );
   };
 
-  // Submit invoice
+  // Submit invoice (Create or Update)
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (submitting) return;
+
+    if (isEdit && !canEdit) {
+      toast('You do not have permission to edit invoices', 'error');
+      return;
+    }
 
     if (!formData.customerName?.trim()) {
       toast('Please enter or select a customer name', 'error');
       return;
     }
-    if (totalAmount <= 0) {
-      toast('Total invoice amount must be greater than zero', 'error');
+
+    let finalTotal = totalAmount;
+    if (finalTotal <= 0 && unitPriceNum > 0) {
+      finalTotal = unitPriceNum;
+    }
+    if (finalTotal <= 0 && Number(formData.total) > 0) {
+      finalTotal = Number(formData.total);
+    }
+    if (finalTotal <= 0 && totalReceived > 0) {
+      finalTotal = totalReceived;
+    }
+
+    if (finalTotal <= 0) {
+      toast('Total invoice amount must be greater than zero. Please enter a valid fee.', 'error');
       return;
     }
-    if (totalReceived > totalAmount) {
-      toast(`Amount received (₹${totalReceived}) exceeds invoice total (₹${totalAmount})`, 'error');
+
+    if (totalReceived > finalTotal) {
+      toast(`Amount received (₹${totalReceived}) exceeds invoice total (₹${finalTotal})`, 'error');
       return;
     }
 
@@ -412,6 +567,13 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
         programName: formData.programName || undefined,
         mode: formData.mode || 'Online',
         description: formData.description || undefined,
+        quantity: qtyNum,
+        unitPrice: unitPriceNum > 0 ? unitPriceNum : finalTotal,
+        subtotal: subtotal > 0 ? subtotal : finalTotal,
+        discount: discountAmount,
+        discountRate,
+        tax: taxAmount,
+        taxRate: taxRateNum,
         invoiceDate: formData.invoiceDate,
         dueDate: formData.dueDate,
         paymentDate: formData.paymentDate,
@@ -419,12 +581,12 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
         paymentPlan: formData.paymentPlan,
         totalInstallments: Number(formData.totalInstallments) || paymentRows.length,
         registrationFee: Number(formData.registrationFee) || (formData.mode === 'Offline' ? 3000 : 2000),
-        totalInternshipFee: totalAmount,
-        total: totalAmount,
+        totalInternshipFee: finalTotal,
+        total: finalTotal,
         paid: totalReceived,
-        balance: outstandingBalance,
+        balance: Math.max(0, finalTotal - totalReceived),
         status: calculatedStatus,
-        amountInWords,
+        amountInWords: amountToIndianWords(finalTotal),
         notes: formData.notes,
         paymentRows: paymentRows.map((r, i) => ({
           sNo: i + 1,
@@ -435,14 +597,22 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
           amount: Number(r.amount) || 0,
           status: r.status,
           txnRef: r.txnRef,
+          paymentId: r.paymentId,
         })),
       };
 
-      const res = await api.post('/invoices', payload);
-      toast('Invoice and payment records saved successfully!');
-      if (onSuccess) onSuccess(res.data);
-      onClose();
-      nav(`/invoices/${res.data._id}`);
+      if (isEdit) {
+        const res = await api.put(`/invoices/${initialInvoice._id}`, payload);
+        toast('Invoice updated successfully!');
+        if (onSuccess) onSuccess(res.data);
+        onClose();
+      } else {
+        const res = await api.post('/invoices', payload);
+        toast('Invoice and payment records saved successfully!');
+        if (onSuccess) onSuccess(res.data);
+        onClose();
+        nav(`/invoices/${res.data._id}`);
+      }
     } catch (err) {
       toast(errMsg(err), 'error');
     } finally {
@@ -460,9 +630,13 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
               <FileText className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-lg font-bold text-gray-900">New Payment Invoice</h2>
+              <h2 className="text-lg font-bold text-gray-900">
+                {isEdit ? 'Edit Payment Invoice' : 'New Payment Invoice'}
+              </h2>
               <p className="text-xs text-gray-500">
-                Eco Friendly Tech Solutions • Sequential Invoice Generator
+                {isEdit
+                  ? `Editing ${formData.invoiceNo} • Eco Friendly Tech Solutions`
+                  : 'Eco Friendly Tech Solutions • Sequential Invoice Generator'}
               </p>
             </div>
           </div>
@@ -504,7 +678,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                   <div className="min-w-0">
                     <label className="text-xs font-semibold text-gray-600 uppercase tracking-wider flex items-center gap-1.5">
                       Invoice Number
-                      {loadingNumber && <Spinner />}
+                      {!isEdit && loadingNumber && <Spinner />}
                     </label>
                     <div className="flex items-center gap-1.5 mt-1">
                       <input
@@ -514,17 +688,25 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                         className="input font-mono font-bold text-teal-800 bg-white/90 border-teal-200 text-sm w-full truncate"
                         placeholder="EFTS-INV-/2026-030"
                       />
-                      <button
-                        type="button"
-                        onClick={fetchInvoiceNumber}
-                        disabled={loadingNumber}
-                        className="icon-btn shrink-0 text-teal-600 hover:bg-teal-100/50"
-                        title="Regenerate next number"
-                      >
-                        <RefreshCw className={`h-4 w-4 ${loadingNumber ? 'animate-spin' : ''}`} />
-                      </button>
+                      {!isEdit ? (
+                        <button
+                          type="button"
+                          onClick={fetchInvoiceNumber}
+                          disabled={loadingNumber}
+                          className="icon-btn shrink-0 text-teal-600 hover:bg-teal-100/50"
+                          title="Regenerate next number"
+                        >
+                          <RefreshCw className={`h-4 w-4 ${loadingNumber ? 'animate-spin' : ''}`} />
+                        </button>
+                      ) : (
+                        <span className="shrink-0 text-[11px] font-semibold text-teal-700 bg-teal-50 border border-teal-200 px-2 py-1 rounded">
+                          Preserved
+                        </span>
+                      )}
                     </div>
-                    <span className="text-[11px] text-gray-400">Sequential & race-condition safe</span>
+                    <span className="text-[11px] text-gray-400">
+                      {isEdit ? 'Original invoice number is preserved' : 'Sequential & race-condition safe'}
+                    </span>
                   </div>
 
                   <div>
@@ -581,12 +763,12 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       <div className="text-left">
                         <p className="font-bold text-sm">Online Mode</p>
                         <p className={`text-xs ${formData.mode === 'Online' ? 'text-teal-100' : 'text-gray-500'}`}>
-                          Total Fee: ₹20,000 • Reg Paid: ₹2,000
+                          Standard Fee: ₹20,000 • Reg Paid: ₹2,000
                         </p>
                       </div>
                     </div>
                     <span className={`text-xs font-bold px-2 py-1 rounded-md ${formData.mode === 'Online' ? 'bg-white text-teal-700' : 'bg-gray-100 text-gray-600'}`}>
-                      Balance ₹18,000
+                      Base ₹20,000
                     </span>
                   </button>
 
@@ -604,12 +786,12 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       <div className="text-left">
                         <p className="font-bold text-sm">Offline Mode</p>
                         <p className={`text-xs ${formData.mode === 'Offline' ? 'text-coral-100' : 'text-gray-500'}`}>
-                          Total Fee: ₹30,000 • Reg Paid: ₹3,000
+                          Standard Fee: ₹30,000 • Reg Paid: ₹3,000
                         </p>
                       </div>
                     </div>
                     <span className={`text-xs font-bold px-2 py-1 rounded-md ${formData.mode === 'Offline' ? 'bg-white text-coral-600' : 'bg-gray-100 text-gray-600'}`}>
-                      Balance ₹27,000
+                      Base ₹30,000
                     </span>
                   </button>
                 </div>
@@ -620,7 +802,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3">
                   <div className="flex items-center gap-2">
                     <User className="h-4 w-4 text-brand-600" />
-                    <h3 className="font-semibold text-gray-900 text-sm">Customer Autofill & Details</h3>
+                    <h3 className="font-semibold text-gray-900 text-sm">Customer Details & Autofill</h3>
                   </div>
                   <button
                     type="button"
@@ -658,7 +840,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                   </p>
                 )}
 
-                {/* Customer Details: 2 columns on desktop, 1 on mobile */}
+                {/* Customer Details: 3 columns */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="label">
@@ -669,7 +851,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       required
                       value={formData.customerName}
                       onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-                      placeholder="e.g. Nishanthini"
+                      placeholder="e.g. Sunil Kumar R"
                       className="input"
                     />
                   </div>
@@ -691,13 +873,12 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       type="tel"
                       value={formData.customerPhone}
                       onChange={(e) => setFormData({ ...formData, customerPhone: e.target.value })}
-                      placeholder="e.g. 9655727067"
+                      placeholder="e.g. 9867453423"
                       className="input"
                     />
                   </div>
                 </div>
 
-                {/* Customer Previous Billing Info pill */}
                 {customerInfo && (
                   <div className="flex flex-wrap gap-4 text-xs bg-gray-50 border border-gray-100 rounded-lg p-3 text-gray-600">
                     <div>Total Invoiced: <strong className="text-gray-900">{inr(customerInfo.totalInvoiced)}</strong></div>
@@ -712,11 +893,11 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                 )}
               </div>
 
-              {/* Program & Plan Configuration */}
+              {/* Program & Course Details */}
               <div className="rounded-xl border border-gray-200 p-4 space-y-4 bg-white">
                 <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
                   <BookOpen className="h-4 w-4 text-brand-600" />
-                  <h3 className="font-semibold text-gray-900 text-sm">Program & Payment Terms</h3>
+                  <h3 className="font-semibold text-gray-900 text-sm">Program, Course & Payment Terms</h3>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -745,7 +926,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       required
                       value={formData.programName}
                       onChange={(e) => setFormData({ ...formData, programName: e.target.value })}
-                      placeholder="e.g. Medical Coding"
+                      placeholder="e.g. Medical Coding / Data Analytics"
                       className="input"
                     />
                   </div>
@@ -758,21 +939,24 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       type="number"
                       required
                       min="1"
-                      value={formData.total}
+                      value={totalAmount > 0 ? totalAmount : (unitPrice > 0 ? unitPrice : '')}
                       onChange={(e) => {
-                        const val = e.target.value;
-                        setFormData({ ...formData, total: val });
+                        const val = Math.max(0, parseFloat(e.target.value) || 0);
+                        setUnitPrice(val);
+                        setQuantity(1);
+                        setDiscount(0);
+                        setTaxRate(0);
                       }}
-                      className="input font-bold"
+                      placeholder={formData.mode === 'Online' ? '20000' : '30000'}
+                      className="input font-bold text-gray-900"
                     />
                     <span className="text-[11px] text-gray-400">
-                      {formData.mode === 'Online' ? 'Online rate: ₹20,000' : 'Offline rate: ₹30,000'}
+                      {formData.mode === 'Online' ? 'Standard Online: ₹20,000' : 'Standard Offline: ₹30,000'}
                     </span>
                   </div>
                 </div>
 
-                {/* Payment Plan & Modes */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-1">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
                   <div>
                     <label className="label">Payment Plan</label>
                     <select
@@ -782,7 +966,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                         const plan = e.target.value;
                         setFormData({ ...formData, paymentPlan: plan });
                         if (plan === 'Monthly EMI') {
-                          generateEmiSchedule(formData.totalInstallments || 2, formData.total, formData.paymentMode, formData.programName);
+                          generateEmiSchedule(formData.totalInstallments || 2, totalAmount, formData.paymentMode, formData.programName);
                         }
                       }}
                     >
@@ -809,33 +993,180 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                     </select>
                   </div>
 
-                  {formData.paymentPlan === 'Monthly EMI' && (
-                    <>
-                      <div>
-                        <label className="label">Number of Installments</label>
-                        <input
-                          type="number"
-                          min="1"
-                          max="24"
-                          value={formData.totalInstallments}
-                          onChange={(e) => {
-                            const n = e.target.value;
-                            setFormData({ ...formData, totalInstallments: n });
-                          }}
-                          className="input"
-                        />
-                      </div>
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          onClick={() => generateEmiSchedule(formData.totalInstallments, formData.total, formData.paymentMode, formData.programName)}
-                          className="btn btn-secondary w-full text-xs"
-                        >
-                          Recalculate EMI Schedule
-                        </button>
-                      </div>
-                    </>
-                  )}
+                  <div>
+                    <label className="label">Initial Registration Fee (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.registrationFee}
+                      onChange={(e) => setFormData({ ...formData, registrationFee: parseFloat(e.target.value) || 0 })}
+                      className="input"
+                    />
+                  </div>
+                </div>
+
+                {formData.paymentPlan === 'Monthly EMI' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 border-t border-gray-100">
+                    <div>
+                      <label className="label">Number of Installments</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="24"
+                        value={formData.totalInstallments}
+                        onChange={(e) => {
+                          const n = e.target.value;
+                          setFormData({ ...formData, totalInstallments: n });
+                        }}
+                        className="input"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        type="button"
+                        onClick={() => generateEmiSchedule(formData.totalInstallments, totalAmount, formData.paymentMode, formData.programName)}
+                        className="btn btn-secondary w-full text-xs"
+                      >
+                        Recalculate EMI Schedule
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Item Pricing, Quantity, Discount & Tax (GST) Section */}
+              <div className="rounded-xl border border-gray-200 p-4 space-y-4 bg-white">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-brand-600" />
+                    <h3 className="font-semibold text-gray-900 text-sm">Course / Service Itemization, Discount & Tax</h3>
+                  </div>
+                  <span className="text-xs text-teal-700 bg-teal-50 px-2 py-0.5 rounded font-medium">
+                    Auto-recalculates Subtotal, GST & Total
+                  </span>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="label">Item Description / Particulars</label>
+                  <input
+                    type="text"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    placeholder="e.g. Medical Coding Internship Program – Registration (Online)"
+                    className="input text-sm"
+                  />
+                </div>
+
+                {/* Grid for Quantity, Unit Price, Subtotal, Discount, Tax Rate, Tax Amount */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">
+                      Quantity <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      required
+                      value={quantity}
+                      onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="input mt-1 font-semibold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">
+                      Unit Price (₹) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      required
+                      value={unitPrice}
+                      onChange={(e) => setUnitPrice(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="input mt-1 font-semibold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Subtotal (₹)</label>
+                    <div className="input mt-1 font-bold text-gray-900 bg-gray-50 border-gray-200 flex items-center justify-end select-none">
+                      {inr(subtotal)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Discount (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={subtotal}
+                      value={discount}
+                      onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+                      className="input mt-1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Tax / GST (%)</label>
+                    <select
+                      value={taxRate}
+                      onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
+                      className="input mt-1 font-medium"
+                    >
+                      <option value="0">0% (Nil / Exempt)</option>
+                      <option value="5">5% GST</option>
+                      <option value="12">12% GST</option>
+                      <option value="18">18% GST (Standard)</option>
+                      <option value="28">28% GST</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600">Tax Amount (₹)</label>
+                    <div className="input mt-1 font-semibold text-gray-800 bg-gray-50 border-gray-200 flex items-center justify-end select-none">
+                      {inr(taxAmount)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Calculation Breakdown Pill */}
+                <div className="rounded-lg bg-teal-50/70 border border-teal-100 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-3 text-gray-700">
+                    <span>Subtotal: <strong className="text-gray-900">{inr(subtotal)}</strong></span>
+                    {discountAmount > 0 && (
+                      <span className="text-coral-600 font-medium">
+                        − Discount: <strong>{inr(discountAmount)}</strong> ({discountRate}%)
+                      </span>
+                    )}
+                    <span>Taxable: <strong className="text-gray-900">{inr(taxableAmount)}</strong></span>
+                    {taxAmount > 0 && (
+                      <span className="text-teal-700 font-medium">
+                        + GST ({taxRate}%): <strong>{inr(taxAmount)}</strong>
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-sm font-bold text-teal-900 flex items-center gap-1.5 ml-auto">
+                    Grand Total: <span className="text-base text-teal-800 bg-white px-2.5 py-0.5 rounded-md border border-teal-200">{inr(totalAmount)}</span>
+                  </div>
+                </div>
+
+                {/* Status Override */}
+                <div className="pt-1">
+                  <label className="text-xs font-semibold text-gray-600">Payment Status Override</label>
+                  <select
+                    value={formData.statusOverride}
+                    onChange={(e) => setFormData({ ...formData, statusOverride: e.target.value })}
+                    className="input mt-1"
+                  >
+                    <option value="">Auto-derive from collected payments</option>
+                    {PAYMENT_STATUSES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <span className="text-[11px] text-gray-400">
+                    Effective status: <strong className="text-gray-700">{calculatedStatus}</strong>
+                  </span>
                 </div>
               </div>
 
@@ -848,7 +1179,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                       <h3 className="font-semibold text-gray-900 text-sm">Payment & Installment Rows</h3>
                     </div>
                     <p className="text-xs text-gray-500">
-                      Row 1 is auto-filled as registration payment (₹{formData.mode === 'Online' ? '2,000' : '3,000'})
+                      Manage individual installments, amounts, payment dates and modes
                     </p>
                   </div>
                   <button
@@ -958,7 +1289,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                     <span className="text-[10px] text-gray-400 block">{formData.mode} Mode</span>
                   </div>
                   <div className="rounded-lg bg-white p-3 border border-gray-100 shadow-2xs">
-                    <span className="text-[11px] text-gray-500 uppercase tracking-wider block">Amount Paid (Reg)</span>
+                    <span className="text-[11px] text-gray-500 uppercase tracking-wider block">Amount Paid</span>
                     <span className="text-base sm:text-lg font-bold text-green-600">{inr(totalReceived)}</span>
                     <span className="text-[10px] text-green-500 block">Collected</span>
                   </div>
@@ -1012,7 +1343,7 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                 <p className="text-xs italic text-gray-500">Education • Technology • Career Development</p>
               </div>
 
-              {/* Invoice Meta Grid (Exact master reproduction) */}
+              {/* Invoice Meta Grid */}
               <div className="border border-gray-400 text-xs">
                 <div className="grid grid-cols-4 border-b border-gray-300">
                   <div className="p-1.5 font-bold bg-gray-50 border-r border-gray-300">Invoice No.</div>
@@ -1061,7 +1392,27 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
                 ))}
 
                 {/* Summary rows */}
-                <div className="grid grid-cols-12 border-b border-gray-300 font-bold">
+                {subtotal !== totalAmount && (
+                  <>
+                    <div className="grid grid-cols-12 border-b border-gray-300">
+                      <div className="col-span-10 p-1.5 border-r border-gray-300 pl-4 text-gray-600">Subtotal</div>
+                      <div className="col-span-2 p-1.5 text-right font-medium">{inr(subtotal)}</div>
+                    </div>
+                    {discountAmount > 0 && (
+                      <div className="grid grid-cols-12 border-b border-gray-300 text-coral-600">
+                        <div className="col-span-10 p-1.5 border-r border-gray-300 pl-4">Discount ({discountRate}%)</div>
+                        <div className="col-span-2 p-1.5 text-right font-medium">− {inr(discountAmount)}</div>
+                      </div>
+                    )}
+                    {taxAmount > 0 && (
+                      <div className="grid grid-cols-12 border-b border-gray-300 text-teal-700">
+                        <div className="col-span-10 p-1.5 border-r border-gray-300 pl-4">GST ({taxRate}%)</div>
+                        <div className="col-span-2 p-1.5 text-right font-medium">+ {inr(taxAmount)}</div>
+                      </div>
+                    )}
+                  </>
+                )}
+                <div className="grid grid-cols-12 border-b border-gray-300 font-bold bg-gray-50">
                   <div className="col-span-10 p-1.5 border-r border-gray-300 pl-4">Total Amount</div>
                   <div className="col-span-2 p-1.5 text-right">{inr(totalAmount)}/-</div>
                 </div>
@@ -1126,9 +1477,11 @@ export default function NewInvoiceModal({ onClose, onSuccess }) {
               type="submit"
               form="new-invoice-form"
               className="btn btn-primary px-5"
-              disabled={submitting || loadingNumber}
+              disabled={submitting || (!isEdit && loadingNumber)}
             >
-              {submitting ? 'Saving & Generating...' : 'Save & Generate Invoice'}
+              {submitting
+                ? (isEdit ? 'Saving Changes...' : 'Saving & Generating...')
+                : (isEdit ? 'Save Changes' : 'Save & Generate Invoice')}
             </button>
           </div>
         </div>

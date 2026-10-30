@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
-import { Course, Admission, Invoice, Payment, Customer, nextSeq, nextInvoiceNo, getInitialInvoiceSeqForYear } from '../models.js';
+import { Course, Admission, Invoice, Payment, Customer, nextSeq, nextInvoiceNo, getInitialInvoiceSeqForYear, INVOICE_STATUSES } from '../models.js';
 import { crud } from './crud.js';
 import { scopeFor } from '../scope.js';
 import { pick, diff, httpErr, amountToIndianWords } from '../util.js';
@@ -383,40 +383,81 @@ R.post('/invoices', requireRole(...ALL_ROLES), async (req, res) => {
 });
 
 /* 4. Upgraded Invoice Update */
-R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
+R.put('/invoices/:id', requireRole(...STAFF), async (req, res) => {
   const inv = await Invoice.findOne({ $and: [{ _id: req.params.id }, scopeFor(req.user, 'invoice')] });
-  if (!inv) throw httpErr(404, 'Invoice not found');
+  if (!inv) throw httpErr(404, 'Invoice not found or access denied');
 
-  if (req.body.customerName) inv.customerName = req.body.customerName;
-  if (req.body.customerEmail !== undefined) inv.customerEmail = req.body.customerEmail;
-  if (req.body.customerPhone !== undefined) inv.customerPhone = req.body.customerPhone;
-  if (req.body.programName !== undefined) inv.programName = req.body.programName;
+  // Preserve existing invoice number; allow updating if provided and unique
+  if (req.body.invoiceNo && req.body.invoiceNo.trim() && req.body.invoiceNo.trim() !== inv.invoiceNo) {
+    const cleanNo = req.body.invoiceNo.trim();
+    const existing = await Invoice.findOne({ invoiceNo: cleanNo, _id: { $ne: inv._id } });
+    if (existing) {
+      throw httpErr(409, `Invoice number ${cleanNo} is already in use`);
+    }
+    inv.invoiceNo = cleanNo;
+  }
+
+  // Customer details
+  if (req.body.customerName) inv.customerName = req.body.customerName.trim();
+  if (req.body.customerEmail !== undefined) inv.customerEmail = req.body.customerEmail ? req.body.customerEmail.trim().toLowerCase() : undefined;
+  if (req.body.customerPhone !== undefined) inv.customerPhone = req.body.customerPhone ? req.body.customerPhone.trim() : undefined;
+  if (req.body.customer && isValidObjectId(req.body.customer)) inv.customer = req.body.customer;
+
+  // Dates
+  if (req.body.invoiceDate) inv.invoiceDate = new Date(req.body.invoiceDate);
+  if (req.body.dueDate) inv.dueDate = new Date(req.body.dueDate);
+  if (req.body.paymentDate) inv.paymentDate = new Date(req.body.paymentDate);
+
+  // Program & Course details
+  if (req.body.course && isValidObjectId(req.body.course)) inv.course = req.body.course;
+  if (req.body.admission && isValidObjectId(req.body.admission)) inv.admission = req.body.admission;
+  if (req.body.programName !== undefined) inv.programName = req.body.programName.trim();
+  if (req.body.mode) inv.mode = req.body.mode;
   if (req.body.description !== undefined) inv.description = req.body.description;
+
+  // Quantity, Price, Subtotal, Discount, Tax
+  if (req.body.quantity != null) inv.quantity = Math.max(1, Number(req.body.quantity));
+  if (req.body.unitPrice != null) inv.unitPrice = Number(req.body.unitPrice);
+  if (req.body.subtotal != null) inv.subtotal = Number(req.body.subtotal);
+  if (req.body.discount != null) inv.discount = Number(req.body.discount);
+  if (req.body.discountRate != null) inv.discountRate = Number(req.body.discountRate);
+  if (req.body.tax != null) inv.tax = Number(req.body.tax);
+  if (req.body.taxRate != null) inv.taxRate = Number(req.body.taxRate);
+  if (req.body.registrationFee != null) inv.registrationFee = Number(req.body.registrationFee);
+  if (req.body.totalInternshipFee != null) inv.totalInternshipFee = Number(req.body.totalInternshipFee);
+
+  // Payment terms
   if (req.body.paymentMode) inv.paymentMode = req.body.paymentMode;
   if (req.body.paymentPlan) inv.paymentPlan = req.body.paymentPlan;
   if (req.body.totalInstallments != null) inv.totalInstallments = Number(req.body.totalInstallments);
   if (req.body.currentInstallment != null) inv.currentInstallment = Number(req.body.currentInstallment);
   if (req.body.installmentAmount != null) inv.installmentAmount = Number(req.body.installmentAmount);
   if (req.body.notes !== undefined) inv.notes = req.body.notes;
-  if (req.body.dueDate) inv.dueDate = new Date(req.body.dueDate);
-  if (req.body.paymentDate) inv.paymentDate = new Date(req.body.paymentDate);
 
   if (req.body.total != null) {
     inv.total = Number(req.body.total);
-    inv.amountInWords = amountToIndianWords(inv.total);
+    inv.amountInWords = req.body.amountInWords || amountToIndianWords(inv.total);
+    if (!inv.unitPrice || inv.unitPrice <= 0) {
+      inv.unitPrice = inv.total;
+    }
+    if (!inv.subtotal || inv.subtotal <= 0) {
+      inv.subtotal = inv.total;
+    }
   }
 
   // Update payment rows if supplied
   if (Array.isArray(req.body.paymentRows)) {
     const updatedRows = [];
     const VALID_METHODS = ['UPI', 'Cash', 'Bank Transfer', 'Card', 'Other', 'Cheque', 'Online'];
+    const keptPaymentIds = [];
+
     for (let idx = 0; idx < req.body.paymentRows.length; idx++) {
       const r = req.body.paymentRows[idx];
       const amt = Number(r.amount) || 0;
       if (amt > 0) {
         const isSuccess = r.status === 'Paid' || r.status === 'Success';
         const cleanMode = VALID_METHODS.includes(r.mode) ? r.mode : (inv.paymentMode || 'UPI');
-        let pId = r.paymentId;
+        let pId = r.paymentId && isValidObjectId(r.paymentId) ? r.paymentId : null;
         if (!pId) {
           const pDoc = await Payment.create({
             invoice: inv._id,
@@ -444,6 +485,7 @@ R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
             status: isSuccess ? 'Success' : (r.status || 'Pending'),
           });
         }
+        keptPaymentIds.push(pId);
         updatedRows.push({
           sNo: r.sNo || idx + 1,
           description: r.description,
@@ -457,11 +499,24 @@ R.put('/invoices/:id', requireRole(...ALL_ROLES), async (req, res) => {
         });
       }
     }
+    // Clean up payments that were removed from the invoice during editing
+    await Payment.deleteMany({ invoice: inv._id, _id: { $nin: keptPaymentIds } });
     inv.paymentRows = updatedRows;
+  }
+
+  const validStatuses = Array.isArray(INVOICE_STATUSES) ? INVOICE_STATUSES : ['Pending', 'Partially Paid', 'Paid', 'Overdue', 'Cancelled', 'Failed', 'Refunded'];
+  if (req.body.status && validStatuses.includes(req.body.status)) {
+    inv.status = req.body.status;
   }
 
   await inv.save();
   await recompute(inv._id);
+
+  if (req.body.status && validStatuses.includes(req.body.status)) {
+    inv.status = req.body.status;
+    await inv.save();
+  }
+
   invalidateInvoicePdfCache(inv._id);
   await log(req.user, 'invoice.updated', 'Invoice', inv._id, `Updated invoice ${inv.invoiceNo}`, { team: inv.team });
   emit('payment:updated', inv);

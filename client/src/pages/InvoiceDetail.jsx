@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { Badge, Modal, Spinner, fmt, inr, toast, Confirm } from '../ui.jsx';
-import { Download, Printer, Mail, PlusCircle, ArrowLeft, CheckCircle, Clock, AlertCircle, Trash2, Loader2 } from 'lucide-react';
-import { amountToIndianWords } from './NewInvoiceModal.jsx';
+import { Download, Printer, Mail, PlusCircle, ArrowLeft, CheckCircle, Clock, AlertCircle, Trash2, Loader2, Pencil } from 'lucide-react';
+import NewInvoiceModal, { amountToIndianWords } from './NewInvoiceModal.jsx';
 import InvoiceHeaderDecoration from '../assets/invoiceHeaderSvg.jsx';
 import InvoiceFooterDecoration from '../assets/invoiceFooterSvg.jsx';
 
@@ -23,6 +23,7 @@ export default function InvoiceDetail() {
   const [email, setEmail] = useState({ recipient: '', subject: '', message: '' });
   const [payOpen, setPayOpen] = useState(false);
   const [delConfirm, setDelConfirm] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [pay, setPay] = useState({
     amount: '',
     method: 'UPI',
@@ -256,6 +257,16 @@ export default function InvoiceDetail() {
             {downloading ? <Loader2 className="h-4 w-4 animate-spin text-white" /> : <Download className="h-4 w-4" />}
             {downloading ? 'Downloading…' : 'Download PDF'}
           </button>
+
+          {inv && (user.role === 'superadmin' || user.role === 'admin') && (
+            <button
+              className="btn btn-secondary flex items-center gap-1.5"
+              onClick={() => setEditOpen(true)}
+              title="Edit invoice details"
+            >
+              <Pencil className="h-4 w-4" /> Edit Invoice
+            </button>
+          )}
 
           <button
             className="btn btn-secondary flex items-center gap-1.5"
@@ -659,6 +670,17 @@ export default function InvoiceDetail() {
             }
           }}
           onClose={() => setDelConfirm(false)}
+        />
+      )}
+
+      {editOpen && (
+        <NewInvoiceModal
+          initialInvoice={inv}
+          onClose={() => setEditOpen(false)}
+          onSuccess={() => {
+            setEditOpen(false);
+            load();
+          }}
         />
       )}
     </div>

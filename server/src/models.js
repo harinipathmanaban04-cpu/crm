@@ -135,6 +135,22 @@ leadSchema.pre('validate', function () {
 leadSchema.index({ team: 1, status: 1 });
 export const Lead = model('Lead', leadSchema);
 
+const leadRemovalSchema = new Schema({
+  leadId: ref('Lead', { required: true, index: true }),
+  userId: ref('User', { required: true, index: true }),
+  lead: ref('Lead'),
+  user: ref('User'),
+  removedAt: { type: Date, default: Date.now },
+}, T);
+leadRemovalSchema.index({ leadId: 1, userId: 1 }, { unique: true });
+leadRemovalSchema.pre('validate', function () {
+  if (!this.lead && this.leadId) this.lead = this.leadId;
+  if (!this.leadId && this.lead) this.leadId = this.lead;
+  if (!this.user && this.userId) this.user = this.userId;
+  if (!this.userId && this.user) this.userId = this.user;
+});
+export const LeadRemoval = model('LeadRemoval', leadRemovalSchema);
+
 export const Task = model('Task', new Schema({
   title: { type: String, required: true, trim: true, maxlength: 200 },
   description: { type: String, maxlength: 2000 },
@@ -197,6 +213,13 @@ const invoiceSchema = new Schema({
   mode: { type: String, enum: ['Online', 'Offline'], default: 'Online' },
   invoiceType: { type: String, enum: ['Registration', 'Payment', 'Manual'], default: 'Payment' },
   description: { type: String, trim: true },
+  quantity: { type: Number, default: 1, min: 1 },
+  unitPrice: { type: Number, min: 0 },
+  subtotal: { type: Number, min: 0 },
+  discount: { type: Number, default: 0, min: 0 },
+  discountRate: { type: Number, default: 0, min: 0 },
+  tax: { type: Number, default: 0, min: 0 },
+  taxRate: { type: Number, default: 0, min: 0 },
   paymentMode: { type: String, default: 'UPI' },
   paymentPlan: { type: String, enum: ['One-Time Payment', 'Monthly EMI', 'Custom Installments'], default: 'One-Time Payment' },
   totalInstallments: { type: Number, default: 1, min: 1 },

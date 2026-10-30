@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import { scopeFor } from '../scope.js';
 import { rx, httpErr } from '../util.js';
 import { requireRole } from '../middleware.js';
@@ -29,9 +30,10 @@ export function crud(o) {
     const [items, total] = await Promise.all([query.lean(), M.countDocuments(filter)]);
     res.json({ items, total, page, pages: Math.max(1, Math.ceil(total / limit)) });
   });
-  r.get('/:id', async (req, res) => {
+  r.get('/:id', async (req, res, next) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return next();
     const doc = await findScoped(req, true);
-    if (o.kind === 'lead' && doc.deletedFor?.some((id) => String(id) === String(req.user._id))) {
+    if (o.kind === 'lead' && req.query.hidden !== '1' && req.query.includeHidden !== '1' && doc.deletedFor?.some((id) => String(id) === String(req.user._id))) {
       throw httpErr(404, 'Record not found');
     }
     res.json(doc);
@@ -42,14 +44,18 @@ export function crud(o) {
     await o.onCreate?.(doc, req);
     res.status(201).json(await M.findById(doc._id).populate(o.populate || []));
   });
-  if (o.update) r.put('/:id', requireRole(...(o.update.roles || ['superadmin', 'admin', 'sales'])), async (req, res) => {
+  if (o.update) r.put('/:id', requireRole(...(o.update.roles || ['superadmin', 'admin', 'sales'])), async (req, res, next) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return next();
     const doc = await findScoped(req); const before = doc.toObject();
     await o.update.apply(req, doc); await doc.save();
     await o.onUpdate?.(doc, req, before);
     res.json(await M.findById(doc._id).populate(o.populate || []));
   });
-  if (o.remove) r.delete('/:id', requireRole(...o.remove.roles), async (req, res, next) => {
-    if (req.params.id === 'bulk' || req.params.id === 'bulk-delete') return next();
+  if (o.remove) r.delete('/:id', async (req, res, next) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return next();
+    if (!Array.isArray(o.remove.roles) || !o.remove.roles.includes(req.user.role)) {
+      return res.status(403).json({ message: 'You do not have permission to do this' });
+    }
     const doc = await findScoped(req);
     await o.remove.check?.(doc, req);
     if (o.remove.action) {

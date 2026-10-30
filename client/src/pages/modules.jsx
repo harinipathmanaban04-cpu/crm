@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, AlertTriangle, Trash2, Archive, RotateCcw, FileSpreadsheet, Plus, Mail, Printer, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, UserPlus, PhoneCall, UserCheck, Ban, CheckCircle2, KeyRound, Check, FileDown, Upload, Download, Users, CheckSquare, Square, X, AlertCircle, AlertTriangle, Trash2, Archive, RotateCcw, FileSpreadsheet, Plus, Mail, Printer, Loader2, Pencil } from 'lucide-react';
 import api, { errMsg } from '../api';
 import { useAuth } from '../auth.jsx';
 import { useLookups } from '../lookups.jsx';
@@ -167,9 +167,12 @@ export function Accounts() {
 }
 
 /* ---------------- Leads / Follow-ups ---------------- */
-function LeadDetail({ id, onClose }) {
+function LeadDetail({ id, onClose, hidden = false }) {
   const [l, setL] = useState(null);
-  useEffect(() => { api.get(`/leads/${id}`).then((r) => setL(r.data)).catch((e) => { toast(errMsg(e), 'error'); onClose(); }); }, [id]);
+  useEffect(() => {
+    const params = hidden ? { hidden: '1' } : {};
+    api.get(`/leads/${id}`, { params }).then((r) => setL(r.data)).catch((e) => { toast(errMsg(e), 'error'); onClose(); });
+  }, [id, hidden]);
   return (
     <Modal title="Lead details" onClose={onClose} wide>
       {!l ? <Spinner /> : (
@@ -308,10 +311,19 @@ export function LeadsPage({ mode }) {
     setBulkDeleteLoading(true);
     try {
       const countToDelete = selected.size;
-      const res = await api.post('/leads/bulk-delete', { leadIds: [...selected] });
-      const count = res.data.deletedCount ?? countToDelete;
+      const res = await api.post('/leads/remove-selected', { leadIds: [...selected] });
+      const count = res.data.removedCount ?? res.data.deletedCount ?? countToDelete;
       toast(res.data.message || `Successfully removed ${count} lead${count !== 1 ? 's' : ''} from your view`);
-      setSelected(new Set());
+      const removedIds = res.data.removedIds || res.data.deletedIds;
+      if (removedIds?.length) {
+        setSelected((prev) => {
+          const next = new Set(prev);
+          removedIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      } else {
+        setSelected(new Set());
+      }
       setBulkDeleteConfirm(false);
       setTick((t) => t + 1);
     } catch (e) {
@@ -327,10 +339,18 @@ export function LeadsPage({ mode }) {
     setBulkRestoreLoading(true);
     try {
       const countToRestore = selected.size;
-      const res = await api.post('/leads/bulk-restore', { leadIds: [...selected] });
+      const res = await api.post('/leads/restore-selected', { leadIds: [...selected] });
       const count = res.data.restoredCount ?? countToRestore;
       toast(res.data.message || `Restored ${count} lead${count !== 1 ? 's' : ''} to your view`);
-      setSelected(new Set());
+      if (res.data.restoredIds?.length) {
+        setSelected((prev) => {
+          const next = new Set(prev);
+          res.data.restoredIds.forEach((id) => next.delete(id));
+          return next;
+        });
+      } else {
+        setSelected(new Set());
+      }
       setTick((t) => t + 1);
     } catch (e) {
       toast(errMsg(e), 'error');
@@ -435,8 +455,18 @@ export function LeadsPage({ mode }) {
   return (
     <>
       <ResourcePage
-        title={fu ? 'Follow-ups' : user.role === 'sales' ? 'My Leads' : viewHidden ? 'Removed Leads (Hidden from My View)' : 'Lead Management'}
-        subtitle={fu ? 'Leads with a follow-up due today or overdue' : viewHidden ? 'These leads are hidden from your view only — other authorized users still have access. You can restore them anytime.' : 'Create, assign and track leads in real time'}
+        title={fu ? 'Follow-ups' : viewHidden ? 'Removed Leads (Hidden from My View)' : user.role === 'sales' ? 'My Leads' : 'Lead Management'}
+        subtitle={
+          fu
+            ? 'Leads with a follow-up due today or overdue'
+            : viewHidden
+            ? 'These leads are hidden from your view only — other authorized users still have access. You can restore them anytime.'
+            : isSA
+            ? 'Create, assign and track leads across all teams in real time'
+            : isAdmin
+            ? 'Manage and assign leads for your team'
+            : 'View and manage your assigned leads'
+        }
         endpoint="/leads"
         params={fu ? { followUp: 'due' } : viewHidden ? { hidden: '1' } : {}}
         refreshKey={tick}
@@ -444,9 +474,9 @@ export function LeadsPage({ mode }) {
         newLabel="New Lead"
         canCreate={staff && !fu && !viewHidden}
         canEdit={!viewHidden}
-        canDelete={staff && !fu && !viewHidden}
+        canDelete={!fu && !viewHidden}
         onRowClick={(r) => setView(r._id)}
-        selectable={staff && !fu}
+        selectable={!fu}
         selected={selected}
         onToggleSelect={toggleSelect}
         onSelectAll={handleSelectAll}
@@ -478,7 +508,7 @@ export function LeadsPage({ mode }) {
           )
         }
         headerActions={
-          staff && !fu ? (
+          !fu ? (
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
@@ -524,7 +554,7 @@ export function LeadsPage({ mode }) {
                       <Users className="h-3.5 w-3.5" />Assign to Admin
                     </button>
                   )}
-                  {!viewHidden && (
+                  {!viewHidden && staff && (
                     <button
                       type="button"
                       className="btn btn-primary flex items-center gap-1.5 text-xs"
@@ -613,7 +643,7 @@ export function LeadsPage({ mode }) {
         actions={(r) => (
           <>
             <button className="icon-btn" title="View" onClick={() => setView(r._id)}><Eye className="h-4 w-4" /></button>
-            {viewHidden && staff && (
+            {viewHidden && (
               <button
                 className="icon-btn hover:text-brand-600"
                 title="Restore to my view"
@@ -630,7 +660,7 @@ export function LeadsPage({ mode }) {
       />
 
       {/* Single lead detail modal */}
-      {view && <LeadDetail id={view} onClose={() => setView(null)} />}
+      {view && <LeadDetail id={view} onClose={() => setView(null)} hidden={viewHidden} />}
 
       {/* Single lead assign modal */}
       {assign && (
@@ -958,6 +988,7 @@ export function InvoicesPage() {
   const staff = user.role !== 'sales';
   const [tab, setTab] = useState('Invoices');
   const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [downloadingId, setDownloadingId] = useState(null);
   const nav = useNavigate();
@@ -1070,38 +1101,64 @@ export function InvoicesPage() {
                 ),
               },
             ]}
-            actions={(r) => (
-              <div className="flex items-center gap-1">
-                <button
-                  className="icon-btn text-teal-600 hover:bg-teal-50"
-                  title="View invoice details & preview"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    nav(`/invoices/${r._id}`);
-                  }}
-                >
-                  <Eye className="h-4 w-4" />
-                </button>
-                <button
-                  className="icon-btn text-blue-600 hover:bg-blue-50"
-                  title="Download PDF"
-                  disabled={downloadingId === r._id}
-                  onClick={(e) => handleDownloadPdf(e, r._id, r.invoiceNo)}
-                >
-                  {downloadingId === r._id ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                  ) : (
-                    <Download className="h-4 w-4" />
+            actions={(r) => {
+              const canEditInv = user.role === 'superadmin' || user.role === 'admin';
+              return (
+                <div className="flex items-center gap-1">
+                  <button
+                    className="icon-btn text-teal-600 hover:bg-teal-50"
+                    title="View invoice details & preview"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      nav(`/invoices/${r._id}`);
+                    }}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </button>
+                  {canEditInv && (
+                    <button
+                      className="icon-btn text-indigo-600 hover:bg-indigo-50"
+                      title="Edit invoice"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingInvoice(r);
+                      }}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
                   )}
-                </button>
-              </div>
-            )}
+                  <button
+                    className="icon-btn text-blue-600 hover:bg-blue-50"
+                    title="Download PDF"
+                    disabled={downloadingId === r._id}
+                    onClick={(e) => handleDownloadPdf(e, r._id, r.invoiceNo)}
+                  >
+                    {downloadingId === r._id ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                    ) : (
+                      <Download className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              );
+            }}
           />
 
           {showNewInvoice && (
             <NewInvoiceModal
               onClose={() => setShowNewInvoice(false)}
               onSuccess={() => setRefreshKey((k) => k + 1)}
+            />
+          )}
+
+          {editingInvoice && (
+            <NewInvoiceModal
+              initialInvoice={editingInvoice}
+              onClose={() => setEditingInvoice(null)}
+              onSuccess={() => {
+                setEditingInvoice(null);
+                setRefreshKey((k) => k + 1);
+              }}
             />
           )}
         </>
