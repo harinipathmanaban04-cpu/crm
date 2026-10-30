@@ -34,7 +34,7 @@ export default function ResourcePage({
   const pk = JSON.stringify(params), fk = JSON.stringify(f);
   const load = useCallback(async () => {
     try {
-      const p = { ...params, page, limit: 15 }; Object.entries(f).forEach(([k, v]) => { if (v) p[k] = v; });
+      const defaultLimit = params?.limit || 20; const p = { limit: defaultLimit, ...params, page }; Object.entries(f).forEach(([k, v]) => { if (v) p[k] = v; });
       setData((await api.get(endpoint, { params: p })).data);
     } catch (e) { toast(errMsg(e), 'error'); } finally { setLoading(false); }
   }, [endpoint, pk, fk, page, refreshKey]);

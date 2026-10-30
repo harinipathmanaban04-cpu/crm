@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { Lead, Course, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
+import { Lead, Course, Team, User, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
 import { requireRole } from '../middleware.js';
 import { normPhone, normEmail, httpErr } from '../util.js';
 import { emit } from '../realtime.js';
@@ -9,23 +9,27 @@ import * as XLSX from 'xlsx';
 const r = Router();
 
 export const COL_MAP = {
-  name: ['name', 'lead name', 'student name', 'customer name', 'full name', 'lead'],
-  phone: ['phone', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number', 'ph', 'ph no', 'ph number', 'mobile no', 'contact no'],
-  email: ['email', 'email address', 'mail', 'e-mail', 'gmail', 'gmail address', 'email id', 'gmail id'],
+  name: ['name', 'lead name', 'student name', 'customer name', 'full name', 'lead', 'client name'],
+  phone: ['phone', 'phone number', 'mobile', 'mobile number', 'contact', 'contact number', 'ph', 'ph no', 'ph number', 'mobile no', 'contact no', 'cell', 'cell number', 'telephone'],
+  email: ['email', 'email address', 'mail', 'e-mail', 'gmail', 'gmail address', 'email id', 'gmail id', 'email / gmail', 'email/gmail'],
   address: ['address', 'actual address', 'student address', 'customer address', 'residential address', 'communication address', 'street address', 'permanent address', 'full address', 'addr'],
+  location: ['location', 'city', 'place', 'area', 'town', 'district', 'state', 'native', 'native place'],
   company: ['company', 'company name', 'organization', 'organisation', 'org'],
-  course: ['course', 'course interested', 'course interest', 'interested course', 'program', 'programme'],
-  source: ['source', 'lead source', 'origin', 'referred by'],
-  location: ['location', 'city', 'place', 'area', 'town', 'district', 'state'],
+  course: ['course', 'course interested', 'course interest', 'interested course', 'program', 'programme', 'course name'],
+  source: ['source', 'lead source', 'origin', 'referred by', 'lead origin', 'channel'],
+  priority: ['priority', 'lead priority', 'urgency', 'level', 'prio'],
+  assignedTo: ['assigned to', 'assigned employee', 'employee', 'employee name', 'assigned sales executive', 'sales executive', 'assigned user', 'assigned staff', 'owner', 'assigned', 'agent', 'counsellor', 'counselor', 'executive', 'sales rep'],
+  team: ['team', 'assigned team', 'team name', 'department', 'dept', 'group', 'branch'],
   notes: ['notes', 'note', 'remarks', 'comment', 'comments', 'description', 'remark'],
-  nextFollowUp: ['follow-up date', 'follow up date', 'followup date', 'next follow up', 'next follow-up', 'follow up', 'followup', 'next followup'],
+  nextFollowUp: ['follow-up date', 'follow up date', 'followup date', 'next follow up', 'next follow-up', 'follow up', 'followup', 'next followup', 'due date', 'callback date'],
   status: ['status', 'lead status', 'current status'],
 };
 
 function mapHeader(h) {
-  const low = String(h || '').toLowerCase().trim();
+  const raw = String(h || '').trim();
+  const low = raw.toLowerCase().replace(/[_\-/]+/g, ' ').replace(/\s+/g, ' ').trim();
   for (const [field, aliases] of Object.entries(COL_MAP)) {
-    if (aliases.includes(low)) return field;
+    if (aliases.some((a) => a === low || low.includes(a))) return field;
   }
   return null;
 }
@@ -47,15 +51,15 @@ function parseDate(v) {
 }
 
 // GET /api/leads/import/template — download sample Excel template
-r.get('/template', requireRole('superadmin'), (req, res) => {
+r.get('/template', requireRole('superadmin', 'admin'), (req, res) => {
   const headers = [
-    'Lead Name', 'Phone Number', 'Email', 'Address', 'Company Name',
-    'Course Interested', 'Lead Source', 'Location', 'Notes',
-    'Follow-up Date', 'Lead Status',
+    'Lead Name', 'Phone Number', 'Email', 'Address', 'Location',
+    'Course Interested', 'Lead Source', 'Priority', 'Assigned To', 'Team',
+    'Follow-up Date', 'Lead Status', 'Notes'
   ];
-  const sample1 = ['John Doe', '9876543210', 'john@example.com', '123 Main Street, Suite 400', 'ABC Corp', 'Web Development', 'Website', 'Mumbai', 'Interested in weekend classes', '2025-06-15', 'New'];
-  const sample2 = ['Jane Smith', '8765432109', 'jane@example.com', '45 Park Avenue, Block C', '', 'Data Science', 'Referral', 'Delhi', '', '', 'Contacted'];
-  const sample3 = ['Rahul Kumar', '9123456789', 'rahul@example.com', 'No. 12 Anna Salai, Chennai', 'Tech Solutions', 'Cloud Computing', 'Direct', 'Chennai', 'Call back tomorrow', '2025-06-20', 'RNR (Ring No Response)'];
+  const sample1 = ['John Doe', '9876543210', 'john@example.com', '123 Main Street, Suite 400', 'Chennai', 'Medical Coding', 'Website', 'High', 'vishnu', 'Alpha Team', '2026-06-15', 'New', 'Interested in weekend batch'];
+  const sample2 = ['Jane Smith', '8765432109', 'jane@example.com', '45 Park Avenue, Block C', 'Coimbatore', 'Data Analytics', 'Referral', 'Medium', '', '', '', 'Contacted', ''];
+  const sample3 = ['Rahul Kumar', '9123456789', 'rahul@example.com', 'No. 12 Anna Salai, Trichy', 'Trichy', 'Cloud Computing', 'Direct', 'Low', '', '', '2026-06-20', 'RNR (Ring No Response)', 'Call back next week'];
   const ws = XLSX.utils.aoa_to_sheet([headers, sample1, sample2, sample3]);
   ws['!cols'] = headers.map(() => ({ wch: 22 }));
   const wb = XLSX.utils.book_new();
@@ -67,7 +71,7 @@ r.get('/template', requireRole('superadmin'), (req, res) => {
 });
 
 // POST /api/leads/import/preview — parse file, return column mapping + preview rows
-r.post('/preview', requireRole('superadmin'), async (req, res) => {
+r.post('/preview', requireRole('superadmin', 'admin'), async (req, res) => {
   const { data } = req.body;
   if (!data) throw httpErr(400, 'No file data received');
 
@@ -95,23 +99,24 @@ r.post('/preview', requireRole('superadmin'), async (req, res) => {
     if (f) fieldMap[i] = f;
   });
 
-  const preview = dataRows.slice(0, 5).map((row, i) => {
-    const obj = { _rowNum: i + 2 };
+  const preview = dataRows.slice(0, 5).map((row, idx) => {
+    const mapped = {};
     Object.entries(fieldMap).forEach(([ci, field]) => {
-      obj[field] = String(row[ci] || '').trim();
+      mapped[field] = String(row[ci] || '').trim();
     });
-    return obj;
+    return { rowNumber: idx + 2, raw: row, mapped };
   });
 
+  const mappedFieldValues = Object.values(fieldMap);
   const missingRequired = [];
-  if (!Object.values(fieldMap).includes('name')) missingRequired.push('name');
-  if (!Object.values(fieldMap).includes('phone')) missingRequired.push('phone');
+  if (!mappedFieldValues.includes('name')) missingRequired.push('Lead Name');
+  if (!mappedFieldValues.includes('phone')) missingRequired.push('Phone Number');
 
   res.json({ totalRows: dataRows.length, headers, mappedColumns: fieldMap, preview, missingRequired });
 });
 
 // POST /api/leads/import — actually import leads
-r.post('/', requireRole('superadmin'), async (req, res) => {
+r.post('/', requireRole('superadmin', 'admin'), async (req, res) => {
   const { data, skipDuplicates = true } = req.body;
   if (!data) throw httpErr(400, 'No file data received');
 
@@ -138,10 +143,31 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
   if (!dataRows.length) throw httpErr(400, 'No data rows found');
   if (dataRows.length > 5000) throw httpErr(400, 'Maximum 5000 rows per import');
 
-  // Load active courses for matching
-  const courses = await Course.find({ active: true }).select('name').lean();
+  // Load lookup data for matching Courses, Teams, and Sales Executives
+  const [courses, teams, users] = await Promise.all([
+    Course.find({ active: true }).select('name').lean(),
+    Team.find({}).select('name admin').lean(),
+    User.find({ active: true, role: { $in: ['sales', 'admin'] } }).select('name email role team').lean(),
+  ]);
+
   const courseMap = {};
-  courses.forEach((c) => { courseMap[c.name.toLowerCase().trim()] = c._id; });
+  courses.forEach((c) => {
+    courseMap[c.name.toLowerCase().trim()] = c._id;
+    courseMap[String(c._id)] = c._id;
+  });
+
+  const teamMap = {};
+  teams.forEach((t) => {
+    teamMap[t.name.toLowerCase().trim()] = t;
+    teamMap[String(t._id)] = t;
+  });
+
+  const userMap = {};
+  users.forEach((u) => {
+    userMap[u.name.toLowerCase().trim()] = u;
+    if (u.email) userMap[u.email.toLowerCase().trim()] = u;
+    userMap[String(u._id)] = u;
+  });
 
   // Pre-load all existing phones/emails for duplicate detection
   const existingPhones = new Set();
@@ -243,17 +269,56 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
       }
     }
 
+    // Parse priority
+    let priority = 'Medium';
+    if (obj.priority) {
+      const pLow = obj.priority.toLowerCase().trim();
+      if (pLow === 'high' || pLow === 'urgent') priority = 'High';
+      else if (pLow === 'low') priority = 'Low';
+      else priority = 'Medium';
+    }
+
     // Match course
     let course = null;
     if (obj.course) course = courseMap[obj.course.toLowerCase().trim()] || null;
 
+    // Resolve assignment & team
+    let assignedTo = null;
+    let team = req.user.role === 'admin' ? req.user.team : null;
+    let admin = null;
+
+    if (obj.team) {
+      const matchedTeam = teamMap[obj.team.toLowerCase().trim()];
+      if (matchedTeam) {
+        team = matchedTeam._id;
+        admin = matchedTeam.admin || null;
+      }
+    }
+
+    if (obj.assignedTo) {
+      const matchedUser = userMap[obj.assignedTo.toLowerCase().trim()];
+      if (matchedUser) {
+        if (matchedUser.role === 'sales') {
+          assignedTo = matchedUser._id;
+          if (matchedUser.team) team = matchedUser.team;
+        } else if (matchedUser.role === 'admin') {
+          admin = matchedUser._id;
+          if (matchedUser.team) team = matchedUser.team;
+        }
+      }
+    }
+
+    if (team && !admin) {
+      const t = teamMap[String(team)];
+      if (t?.admin) admin = t.admin;
+    }
+
     // Parse date
     const nextFollowUp = parseDate(obj.nextFollowUp);
 
-    // Build notes from multiple fields (keeping address strictly distinct from notes and location)
+    // Build notes strictly without polluting notes with location
     const notesParts = [
       obj.notes,
-      obj.location ? `Location: ${obj.location}` : '',
       obj.company ? `Company: ${obj.company}` : '',
     ].filter(Boolean);
 
@@ -265,13 +330,20 @@ r.post('/', requireRole('superadmin'), async (req, res) => {
         phone: obj.phone,
         email: email || undefined,
         address: obj.address?.trim() || undefined,
+        location: obj.location?.trim() || undefined,
         course: course || undefined,
         source: obj.source || 'Import',
-        notes: notesParts.join('\n').substring(0, 2000) || undefined,
+        priority,
         status,
+        team: team || undefined,
+        admin: admin || undefined,
+        assignedTo: assignedTo || undefined,
         nextFollowUp: nextFollowUp || undefined,
+        notes: notesParts.join('\n').substring(0, 2000) || undefined,
         createdBy: req.user._id,
-        history: [{ type: 'created', by: req.user._id }],
+        history: assignedTo
+          ? [{ type: 'assigned', to: assignedTo, team, by: req.user._id }]
+          : [{ type: 'created', by: req.user._id, team }],
       });
       existingPhones.add(normP);
       if (email) existingEmails.add(email);

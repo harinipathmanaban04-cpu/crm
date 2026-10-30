@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { Lead, User, Team, Customer, Task, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
+import { Lead, LeadRemoval, User, Team, Customer, Task, Notification, nextSeq, LEAD_STATUSES } from '../models.js';
 import { crud } from './crud.js';
 import { requireRole } from '../middleware.js';
 import { scopeFor } from '../scope.js';
@@ -8,33 +8,80 @@ import { emit, emitRooms } from '../realtime.js';
 import { log } from '../services/activity.js';
 import { assertUnique } from '../services/customer.js';
 
+export function canUserHideLead(user, lead) {
+  if (!user || !lead) return false;
+  // Super Admin can manage/hide any lead from their view
+  if (user.role === 'superadmin') return true;
+
+  const userIdStr = String(user._id || user);
+  const createdByStr = lead.createdBy ? String(lead.createdBy._id || lead.createdBy) : null;
+  const assignedToStr = lead.assignedTo ? String(lead.assignedTo._id || lead.assignedTo) : null;
+  const adminStr = lead.admin ? String(lead.admin._id || lead.admin) : null;
+  const leadTeamStr = lead.team ? String(lead.team._id || lead.team) : null;
+  const userTeamStr = user.team ? String(user.team._id || user.team) : null;
+
+  // The creator of the lead is always allowed to remove/restore that lead from their own view
+  if (createdByStr && createdByStr === userIdStr) {
+    return true;
+  }
+
+  // Admin role: allowed if assigned as admin, assigned as lead owner, or lead is in admin's team
+  if (user.role === 'admin') {
+    if (adminStr && adminStr === userIdStr) return true;
+    if (assignedToStr && assignedToStr === userIdStr) return true;
+    if (userTeamStr && leadTeamStr && userTeamStr === leadTeamStr) return true;
+    return false;
+  }
+
+  // Sales Executive: allowed if lead is assigned to them (or created by them)
+  if (user.role === 'sales') {
+    if (assignedToStr && assignedToStr === userIdStr) return true;
+    return false;
+  }
+
+  return false;
+}
+
 const POP = [{ path: 'assignedTo', select: 'name email' }, { path: 'admin', select: 'name' }, { path: 'team', select: 'name' }, { path: 'createdBy', select: 'name' }, { path: 'course', select: 'name' },
   { path: 'history.to', select: 'name' }, { path: 'history.from', select: 'name' }, { path: 'history.by', select: 'name' }, { path: 'history.team', select: 'name' }, { path: 'followUps.by', select: 'name' }];
-const FIELDS = ['name', 'phone', 'email', 'address', 'course', 'source', 'status', 'priority', 'nextFollowUp', 'notes'];
+const FIELDS = ['name', 'phone', 'email', 'address', 'location', 'course', 'source', 'status', 'priority', 'nextFollowUp', 'notes'];
 
 async function resolveAssignment(user, assignedToId, teamId) {
   let team = null, assignedTo = null;
-  if (assignedToId) {
+  if (user.role === 'sales') {
+    assignedTo = user._id;
+    team = user.team || null;
+  } else if (assignedToId) {
     const se = await User.findOne({ _id: assignedToId, role: 'sales', active: true });
     if (!se) throw httpErr(400, 'Invalid Sales Executive');
-    if (user.role === 'admin' && String(se.team) !== String(user.team)) throw httpErr(403, 'You can only assign to Sales Executives in your team');
-    assignedTo = se._id; team = se.team;
-  } else if (user.role === 'admin') team = user.team;
-  else if (teamId) team = teamId;
+    if (user.role === 'admin' && user.team && se.team && String(se.team) !== String(user.team)) {
+      throw httpErr(403, 'You can only assign to Sales Executives in your team');
+    }
+    assignedTo = se._id;
+    team = se.team || user.team || null;
+  } else if (user.role === 'admin') {
+    team = user.team || null;
+  } else if (teamId) {
+    team = teamId;
+  }
   const t = team ? await Team.findById(team) : null;
-  return { assignedTo, team: team || null, admin: t?.admin || null };
+  return { assignedTo, team: team || null, admin: t?.admin || (user.role === 'admin' ? user._id : null) };
 }
 const scoped = (req) => Lead.findOne({
   $and: [
     { _id: req.params.id },
     scopeFor(req.user, 'lead'),
-    req.query.hidden === '1' ? { deletedFor: req.user._id } : { deletedFor: { $ne: req.user._id } },
+    req.query.includeHidden === '1'
+      ? {}
+      : req.query.hidden === '1'
+      ? { deletedFor: req.user._id }
+      : { deletedFor: { $ne: req.user._id } },
   ],
 });
 
 const router = crud({
   Model: Lead, kind: 'lead', populate: POP, listSelect: '-history -followUps',
-  search: ['name', 'phone', 'email', 'address', 'leadId'], filters: ['status', 'priority', 'source', 'course', 'team', 'admin', 'assignedTo'],
+  search: ['name', 'phone', 'email', 'address', 'location', 'leadId'], filters: ['status', 'priority', 'source', 'course', 'team', 'admin', 'assignedTo'],
   extra: (req) => [
     req.query.hidden === '1'
       ? { deletedFor: req.user._id }
@@ -43,7 +90,7 @@ const router = crud({
     req.query.followUp === 'due' && { nextFollowUp: { $ne: null, $lte: endOfToday() }, status: { $nin: ['Converted', 'Lost'] } },
   ],
   create: {
-    roles: ['superadmin', 'admin'],
+    roles: ['superadmin', 'admin', 'sales'],
     build: async (req) => {
       const a = await resolveAssignment(req.user, req.body.assignedTo, req.body.team);
       return { ...pick(req.body, FIELDS), ...a, createdBy: req.user._id, leadId: 'LD-' + String(await nextSeq('lead')).padStart(5, '0'),
@@ -52,35 +99,49 @@ const router = crud({
   },
   update: {
     apply: async (req, doc) => {
-      const keys = req.user.role === 'sales' ? ['status', 'notes', 'nextFollowUp', 'priority', 'address'] : FIELDS;
+      const keys = req.user.role === 'sales' ? ['status', 'notes', 'nextFollowUp', 'priority', 'address', 'location'] : FIELDS;
       const updates = pick(req.body, keys);
       if (updates.email !== undefined) updates.email = updates.email ? String(updates.email).trim().toLowerCase() : undefined;
       if (updates.address !== undefined) updates.address = updates.address ? String(updates.address).trim() : undefined;
+      if (updates.location !== undefined) updates.location = updates.location ? String(updates.location).trim() : undefined;
       Object.assign(doc, updates);
     },
   },
   remove: {
-    roles: ['superadmin', 'admin'],
+    roles: ['superadmin', 'admin', 'sales'],
+    check: async (doc, req) => {
+      if (!canUserHideLead(req.user, doc)) {
+        throw httpErr(403, 'You do not have permission to remove this lead');
+      }
+    },
     action: async (doc, req, res) => {
       // Per-user soft-delete: remove lead only from req.user's view without destroying shared record
-      await Lead.updateOne(
-        { _id: doc._id },
-        {
-          $addToSet: { deletedFor: req.user._id },
-          $push: {
-            history: {
-              type: 'removed_from_view',
-              by: req.user._id,
-              team: doc.team,
-              at: new Date(),
+      const alreadyHidden = doc.deletedFor?.some((id) => String(id) === String(req.user._id));
+      if (!alreadyHidden) {
+        await Lead.updateOne(
+          { _id: doc._id },
+          {
+            $addToSet: { deletedFor: req.user._id },
+            $push: {
+              history: {
+                type: 'removed_from_view',
+                by: req.user._id,
+                team: doc.team,
+                at: new Date(),
+              },
             },
-          },
-        }
-      );
+          }
+        );
+      }
+      await LeadRemoval.updateOne(
+        { leadId: doc._id, userId: req.user._id },
+        { $set: { leadId: doc._id, userId: req.user._id, lead: doc._id, user: req.user._id, removedAt: new Date() } },
+        { upsert: true }
+      ).catch((err) => console.warn('LeadRemoval upsert error:', err.message));
       await log(req.user, 'lead.hidden', 'Lead', doc._id, `Removed lead ${doc.name} from view`, { team: doc.team });
       emit('lead:updated', doc);
       emit('lead:deleted', { id: String(doc._id), user: String(req.user._id) });
-      res.json({ ok: true, message: 'Lead removed from your view' });
+      res.json({ ok: true, message: alreadyHidden ? 'Lead already removed from your view' : 'Lead removed from your view' });
     },
   },
   onCreate: async (doc, req) => {
@@ -245,7 +306,7 @@ router.post('/bulk-assign-sales', requireRole('superadmin', 'admin'), async (req
   res.json({ ok: true, assigned });
 });
 
-// Bulk remove leads (per-user soft deletion for SuperAdmin and Admin)
+// Bulk remove leads (per-user soft removal)
 async function handleBulkDelete(req, res) {
   const leadIds = req.body.leadIds || req.body.ids;
   if (!Array.isArray(leadIds) || !leadIds.length) {
@@ -261,20 +322,32 @@ async function handleBulkDelete(req, res) {
   // Convert to ObjectId strings to deduplicate
   const uniqueIds = [...new Set(leadIds.map(String))];
 
-  // Scope check: fetch only leads the user is authorized to manage
-  const scopeFilter = scopeFor(req.user, 'lead');
-  const leads = await Lead.find({ _id: { $in: uniqueIds }, ...scopeFilter });
-
+  // Fetch all requested leads from database
+  const leads = await Lead.find({ _id: { $in: uniqueIds } });
   if (!leads.length) {
-    throw httpErr(404, 'No leads found within your authorized scope');
+    throw httpErr(404, 'No matching leads found');
   }
 
-  // Prevent Admins from modifying leads outside their team scope
-  if (req.user.role === 'admin' && leads.length < uniqueIds.length) {
-    throw httpErr(403, 'You do not have permission to remove one or more selected leads');
+  // Verify permission for each selected lead
+  const authorizedLeads = [];
+  const unauthorizedIds = [];
+
+  for (const id of uniqueIds) {
+    const lead = leads.find((l) => String(l._id) === String(id));
+    if (lead && canUserHideLead(req.user, lead)) {
+      authorizedLeads.push(lead);
+    } else {
+      unauthorizedIds.push(id);
+    }
   }
 
-  const authorizedIds = leads.map((l) => l._id);
+  // Handle case where none of the selected leads are authorized
+  if (!authorizedLeads.length) {
+    throw httpErr(403, 'You do not have permission to remove the selected lead(s)');
+  }
+
+  const newlyHiddenLeads = authorizedLeads.filter((l) => !l.deletedFor?.some((id) => String(id) === String(req.user._id)));
+  const authorizedIds = newlyHiddenLeads.map((l) => l._id);
 
   // Per-user soft-delete: Add req.user._id to deletedFor array
   const result = await Lead.updateMany(
@@ -290,6 +363,29 @@ async function handleBulkDelete(req, res) {
       },
     }
   );
+
+  // Maintain separate LeadRemoval tracking records (lead, user, removedAt)
+  const removalOps = authorizedIds.map((leadId) => ({
+    updateOne: {
+      filter: { leadId, userId: req.user._id },
+      update: {
+        $set: {
+          leadId,
+          userId: req.user._id,
+          lead: leadId,
+          user: req.user._id,
+          removedAt: new Date(),
+        },
+      },
+      upsert: true,
+    },
+  }));
+  if (removalOps.length) {
+    await LeadRemoval.bulkWrite(removalOps).catch((err) =>
+      console.warn('LeadRemoval bulkWrite error:', err.message)
+    );
+  }
+
   const deletedCount = result.modifiedCount || authorizedIds.length;
 
   // Log activity
@@ -302,42 +398,146 @@ async function handleBulkDelete(req, res) {
     {
       deletedCount,
       requestedCount: uniqueIds.length,
+      unauthorizedCount: unauthorizedIds.length,
       leadIds: authorizedIds.map(String),
-      names: leads.slice(0, 10).map((l) => l.name),
+      names: authorizedLeads.slice(0, 10).map((l) => l.name),
     }
   );
 
   // Emit realtime updates
-  for (const lead of leads) {
+  for (const lead of newlyHiddenLeads) {
     emit('lead:deleted', { id: String(lead._id), user: String(req.user._id) });
     emit('lead:updated', lead);
   }
 
+  let message = `Successfully removed ${deletedCount} lead${deletedCount !== 1 ? 's' : ''} from your view`;
+  if (unauthorizedIds.length > 0) {
+    message += `. ${unauthorizedIds.length} lead${unauthorizedIds.length !== 1 ? 's were' : ' was'} skipped (no permission).`;
+  }
+
   res.json({
+    success: true,
     ok: true,
+    removedCount: deletedCount,
     deletedCount,
-    deletedIds: authorizedIds,
-    message: `Successfully removed ${deletedCount} lead${deletedCount !== 1 ? 's' : ''} from your view`,
+    skippedCount: unauthorizedIds.length,
+    unauthorizedCount: unauthorizedIds.length,
+    removedIds: authorizedIds.map(String),
+    deletedIds: authorizedIds.map(String),
+    skippedIds: unauthorizedIds,
+    unauthorizedIds,
+    message,
+  });
+}
+
+// GET /removed: return removal records for authenticated user with populated lead details
+async function handleGetRemoved(req, res) {
+  const [removals, legacyLeads] = await Promise.all([
+    LeadRemoval.find({
+      $or: [{ userId: req.user._id }, { user: req.user._id }],
+    })
+      .sort('-removedAt')
+      .populate({
+        path: 'lead',
+        populate: [
+          { path: 'assignedTo', select: 'name email' },
+          { path: 'admin', select: 'name' },
+          { path: 'team', select: 'name' },
+          { path: 'createdBy', select: 'name' },
+          { path: 'course', select: 'name fee' },
+        ],
+      })
+      .populate({
+        path: 'leadId',
+        populate: [
+          { path: 'assignedTo', select: 'name email' },
+          { path: 'admin', select: 'name' },
+          { path: 'team', select: 'name' },
+          { path: 'createdBy', select: 'name' },
+          { path: 'course', select: 'name fee' },
+        ],
+      })
+      .lean(),
+    Lead.find({ deletedFor: req.user._id })
+      .populate([
+        { path: 'assignedTo', select: 'name email' },
+        { path: 'admin', select: 'name' },
+        { path: 'team', select: 'name' },
+        { path: 'createdBy', select: 'name' },
+        { path: 'course', select: 'name fee' },
+      ])
+      .lean(),
+  ]);
+
+  const seen = new Set();
+  const items = [];
+
+  for (const r of removals) {
+    const lead = r.leadId || r.lead;
+    if (!lead || !lead._id) continue;
+    const idStr = String(lead._id);
+    if (!seen.has(idStr)) {
+      seen.add(idStr);
+      items.push({
+        ...lead,
+        removedAt: r.removedAt || lead.updatedAt || new Date(),
+        removalId: r._id,
+      });
+    }
+  }
+
+  for (const lead of legacyLeads) {
+    const idStr = String(lead._id);
+    if (!seen.has(idStr)) {
+      seen.add(idStr);
+      items.push({
+        ...lead,
+        removedAt: lead.updatedAt || new Date(),
+      });
+    }
+  }
+
+  res.json({
+    success: true,
+    ok: true,
+    count: items.length,
+    total: items.length,
+    page: 1,
+    pages: 1,
+    items,
   });
 }
 
 // Single restore endpoint: restore lead to user's view
-router.post('/:id/restore', requireRole('superadmin', 'admin'), async (req, res) => {
-  const scopeFilter = scopeFor(req.user, 'lead');
-  const lead = await Lead.findOne({ _id: req.params.id, ...scopeFilter });
-  if (!lead) throw httpErr(404, 'Lead not found in your scope');
+router.post('/:id/restore', requireRole('superadmin', 'admin', 'sales'), async (req, res) => {
+  const lead = await Lead.findById(req.params.id);
+  if (!lead) throw httpErr(404, 'Lead not found');
 
-  await Lead.updateOne({ _id: lead._id }, { $pull: { deletedFor: req.user._id } });
-  lead.history.push({ type: 'restored_to_view', by: req.user._id, at: new Date() });
-  await lead.save();
+  if (!canUserHideLead(req.user, lead)) {
+    throw httpErr(403, 'You do not have permission to restore this lead');
+  }
 
-  await log(req.user, 'lead.restored', 'Lead', lead._id, `Restored lead ${lead.name} to view`, { team: lead.team });
-  emit('lead:updated', lead);
-  res.json({ ok: true, message: 'Lead restored to your view' });
+  const wasHidden = lead.deletedFor?.some((id) => String(id) === String(req.user._id));
+  if (wasHidden) await Lead.updateOne({ _id: lead._id }, { $pull: { deletedFor: req.user._id } });
+  if (wasHidden) await LeadRemoval.deleteMany({
+    $or: [
+      { leadId: lead._id, userId: req.user._id },
+      { lead: lead._id, user: req.user._id },
+    ],
+  }).catch((err) => console.warn('LeadRemoval delete error:', err.message));
+
+  if (wasHidden) {
+    lead.history.push({ type: 'restored_to_view', by: req.user._id, at: new Date() });
+    await lead.save();
+  }
+
+  if (wasHidden) await log(req.user, 'lead.restored', 'Lead', lead._id, `Restored lead ${lead.name} to view`, { team: lead.team});
+  if (wasHidden) emit('lead:updated', lead);
+  res.json({ success: true, ok: true, message: wasHidden ? 'Lead restored to your view' : 'Lead already restored to your view' });
 });
 
 // Bulk restore endpoint: restore multiple leads to user's view
-router.post('/bulk-restore', requireRole('superadmin', 'admin'), async (req, res) => {
+async function handleBulkRestore(req, res) {
   const leadIds = req.body.leadIds || req.body.ids;
   if (!Array.isArray(leadIds) || !leadIds.length) throw httpErr(400, 'Select at least one lead to restore');
 
@@ -345,26 +545,71 @@ router.post('/bulk-restore', requireRole('superadmin', 'admin'), async (req, res
   if (invalid.length > 0) throw httpErr(400, `Invalid lead ID(s): ${invalid.slice(0, 3).join(', ')}`);
 
   const uniqueIds = [...new Set(leadIds.map(String))];
-  const scopeFilter = scopeFor(req.user, 'lead');
-  const leads = await Lead.find({ _id: { $in: uniqueIds }, ...scopeFilter });
+  const leads = await Lead.find({ _id: { $in: uniqueIds } });
   if (!leads.length) throw httpErr(404, 'No matching leads found');
 
-  const authorizedIds = leads.map((l) => l._id);
+  const authorizedLeads = [];
+  const unauthorizedIds = [];
+
+  for (const id of uniqueIds) {
+    const lead = leads.find((l) => String(l._id) === String(id));
+    if (lead && canUserHideLead(req.user, lead)) {
+      authorizedLeads.push(lead);
+    } else {
+      unauthorizedIds.push(id);
+    }
+  }
+
+  if (!authorizedLeads.length) {
+    throw httpErr(403, 'You do not have permission to restore the selected lead(s)');
+  }
+
+  const newlyRestoredLeads = authorizedLeads.filter((l) => l.deletedFor?.some((id) => String(id) === String(req.user._id)));
+  const authorizedIds = newlyRestoredLeads.map((l) => l._id);
   const result = await Lead.updateMany(
     { _id: { $in: authorizedIds } },
     { $pull: { deletedFor: req.user._id } }
   );
-  const restoredCount = result.modifiedCount || authorizedIds.length;
+  await LeadRemoval.deleteMany({
+    $or: [
+      { leadId: { $in: authorizedIds }, userId: req.user._id },
+      { lead: { $in: authorizedIds }, user: req.user._id },
+    ],
+  }).catch(() => {});
 
+  const restoredCount = result.modifiedCount || authorizedIds.length;
   await log(req.user, 'lead.bulk-restored', 'Lead', null, `Restored ${restoredCount} leads to view`, { leadIds: authorizedIds });
-  for (const lead of leads) {
+  for (const lead of newlyRestoredLeads) {
     emit('lead:updated', lead);
   }
-  res.json({ ok: true, restoredCount, message: `Successfully restored ${restoredCount} lead${restoredCount !== 1 ? 's' : ''} to your view` });
-});
 
-router.post('/bulk-delete', requireRole('superadmin', 'admin'), handleBulkDelete);
-router.delete('/bulk', requireRole('superadmin', 'admin'), handleBulkDelete);
-router.delete('/bulk-delete', requireRole('superadmin', 'admin'), handleBulkDelete);
+  let message = `Successfully restored ${restoredCount} lead${restoredCount !== 1 ? 's' : ''} to your view`;
+  if (unauthorizedIds.length > 0) {
+    message += `. ${unauthorizedIds.length} lead${unauthorizedIds.length !== 1 ? 's were' : ' was'} skipped (no permission).`;
+  }
+
+  res.json({
+    success: true,
+    ok: true,
+    restoredCount,
+    skippedCount: unauthorizedIds.length,
+    unauthorizedCount: unauthorizedIds.length,
+    restoredIds: authorizedIds.map(String),
+    skippedIds: unauthorizedIds,
+    unauthorizedIds,
+    message,
+  });
+}
+
+// User-specific lead removal endpoints
+router.post('/remove-selected', requireRole('superadmin', 'admin', 'sales'), handleBulkDelete);
+router.post('/bulk-delete', requireRole('superadmin', 'admin', 'sales'), handleBulkDelete);
+router.delete('/bulk', requireRole('superadmin', 'admin', 'sales'), handleBulkDelete);
+router.delete('/bulk-delete', requireRole('superadmin', 'admin', 'sales'), handleBulkDelete);
+
+// User-specific removed leads querying & restoration endpoints
+router.get('/removed', requireRole('superadmin', 'admin', 'sales'), handleGetRemoved);
+router.post('/restore-selected', requireRole('superadmin', 'admin', 'sales'), handleBulkRestore);
+router.post('/bulk-restore', requireRole('superadmin', 'admin', 'sales'), handleBulkRestore);
 
 export default router;
