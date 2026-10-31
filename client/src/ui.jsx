@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import React, { Component, createContext, useContext, useEffect, useState } from 'react';
 import { X, ChevronLeft, ChevronRight, Inbox, Loader2, Upload } from 'lucide-react';
 
 // Exact color palette extracted from the official EFTS logo
@@ -275,3 +275,38 @@ export const Stat = ({ id, label, value, icon: Icon, tone, sub, color, index = 0
 export const fmt = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 export const fmtDT = (d) => (d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
 export const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+
+
+export class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    console.error('[ErrorBoundary]', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center m-4 shadow-sm">
+          <p className="text-base font-semibold text-red-800 mb-1">View rendering notice</p>
+          <p className="text-xs text-red-600 mb-4">{this.state.error?.message || 'A render error occurred in this view.'}</p>
+          <button
+            type="button"
+            className="btn btn-primary text-xs py-1.5 px-4"
+            onClick={() => {
+              this.setState({ hasError: false, error: null });
+              window.location.reload();
+            }}
+          >
+            Reload Page
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}

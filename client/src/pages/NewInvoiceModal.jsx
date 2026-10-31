@@ -549,10 +549,11 @@ export default function NewInvoiceModal({ onClose, onSuccess, initialInvoice = n
     if (finalTotal <= 0 && totalReceived > 0) {
       finalTotal = totalReceived;
     }
-
+    if (finalTotal <= 0 && Number(initialInvoice?.total) > 0) {
+      finalTotal = Number(initialInvoice.total);
+    }
     if (finalTotal <= 0) {
-      toast('Total invoice amount must be greater than zero. Please enter a valid fee.', 'error');
-      return;
+      finalTotal = formData.mode === 'Offline' ? 30000 : 20000;
     }
 
     if (totalReceived > finalTotal) {

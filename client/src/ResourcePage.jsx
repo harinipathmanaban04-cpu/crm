@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import React, { isValidElement, useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Search } from 'lucide-react';
 import api, { errMsg } from './api';
 import { useAuth } from './auth.jsx';
@@ -182,7 +182,13 @@ export default function ResourcePage({
                         />
                       </td>
                     )}
-                    {columns.map((c) => <td key={c.label} className="td">{c.render ? c.render(row, user) : row[c.key] ?? '—'}</td>)}
+                    {columns.map((c) => {
+                      const cell = c.render ? c.render(row, user) : (row[c.key] ?? '—');
+                      const safeCell = (typeof cell === 'object' && cell !== null && !isValidElement(cell))
+                        ? (cell.name || cell.title || cell.label || JSON.stringify(cell))
+                        : cell;
+                      return <td key={c.label} className="td">{safeCell}</td>;
+                    })}
                     {hasActions && (
                       <td className="td" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">

@@ -100,11 +100,11 @@ r.post('/preview', requireRole('superadmin', 'admin'), async (req, res) => {
   });
 
   const preview = dataRows.slice(0, 5).map((row, idx) => {
-    const mapped = {};
+    const obj = { _rowNum: idx + 2 };
     Object.entries(fieldMap).forEach(([ci, field]) => {
-      mapped[field] = String(row[ci] || '').trim();
+      obj[field] = String(row[ci] || '').trim();
     });
-    return { rowNumber: idx + 2, raw: row, mapped };
+    return obj;
   });
 
   const mappedFieldValues = Object.values(fieldMap);

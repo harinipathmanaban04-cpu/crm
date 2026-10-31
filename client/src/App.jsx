@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
 import Login from './pages/Login.jsx';
-import { Spinner } from './ui.jsx';
+import { Spinner, ErrorBoundary } from './ui.jsx';
 
 // Lazy-load protected workspace views to drastically speed up initial page load and login render
 const Layout = lazy(() => import('./Layout.jsx'));
@@ -43,7 +43,7 @@ function Protected({ children, allowTemp, roles }) {
   if (!user) return <Navigate to="/login" replace />;
   if (user.mustChangePassword && !allowTemp) return <Navigate to="/change-password" replace />;
   if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
-  return <Suspense fallback={<PageFallback />}>{children}</Suspense>;
+  return <ErrorBoundary><Suspense fallback={<PageFallback />}>{children}</Suspense></ErrorBoundary>;
 }
 
 export default function App() {

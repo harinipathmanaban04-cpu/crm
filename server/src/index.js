@@ -15,11 +15,11 @@ dotenv.config();
 
 import http from 'http';
 import mongoose from 'mongoose';
-import app, { allowedOrigins } from './app.js';
+import app, { allowedOrigins, isOriginAllowed } from './app.js';
 app.set('trust proxy', 1);
 import bcrypt from 'bcryptjs';
 import { initSocket } from './realtime.js';
-import { User } from './models.js';
+import { User, migrateLegacyLeadLocations } from './models.js';
 import { verifySmtpConnection, isEmailConfigured } from './services/mailer.js';
 import { normEmail } from './util.js';
 
@@ -28,7 +28,7 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 16) {
   process.exit(1);
 }
 const server = http.createServer(app);
-initSocket(server, allowedOrigins);
+initSocket(server, isOriginAllowed);
 
 const defaultPort = Number(process.env.PORT) || 5000;
 
@@ -78,6 +78,7 @@ mongoose.connect(mongoUri, {
       console.log('Created Super Admin', email);
     }
     console.log('✅ Database connected:', mongoose.connection.name);
+    migrateLegacyLeadLocations().catch(() => {});
     // Safe email configuration diagnostics (no secrets)
     console.log(`[email] Email configured: ${isEmailConfigured()}`);
     verifySmtpConnection().catch(() => {});

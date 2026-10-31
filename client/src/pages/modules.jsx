@@ -812,36 +812,67 @@ export function LeadsPage({ mode }) {
 
                     <div className="text-xs text-gray-500">
                       <span className="font-medium">Mapped columns: </span>
-                      {Object.values(importPreview.mappedColumns).join(', ') || 'None detected'}
+                      {(Array.isArray(importPreview.mappedColumns)
+                        ? importPreview.mappedColumns
+                        : Object.values(importPreview.mappedColumns || {})
+                      ).filter((v) => typeof v === 'string').join(', ') || 'None detected'}
                     </div>
 
-                    {importPreview.preview?.length > 0 && (
-                      <div className="overflow-x-auto rounded border border-gray-200">
-                        <table className="min-w-full text-xs">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              {Object.keys(importPreview.preview[0]).filter((k) => k !== '_rowNum').map((k) => (
-                                <th key={k} className="px-2 py-1.5 text-left font-medium text-gray-600 capitalize">{k}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {importPreview.preview.map((row, i) => (
-                              <tr key={i} className="border-t border-gray-100">
-                                {Object.entries(row).filter(([k]) => k !== '_rowNum').map(([k, v]) => (
-                                  <td key={k} className="px-2 py-1.5 text-gray-700 max-w-[150px] truncate">{v || '—'}</td>
+                    {importPreview.preview?.length > 0 && (() => {
+                      const normalizedRows = importPreview.preview.map((r) => {
+                        const source = (r && typeof r === 'object' && r.mapped && typeof r.mapped === 'object') ? r.mapped : r;
+                        const clean = {};
+                        if (source && typeof source === 'object') {
+                          Object.entries(source).forEach(([k, v]) => {
+                            if (k === '_rowNum' || k === 'rowNumber' || k === 'raw' || k === 'mapped') return;
+                            if (v == null) {
+                              clean[k] = '';
+                            } else if (typeof v === 'object') {
+                              clean[k] = Array.isArray(v)
+                                ? v.map((item) => (typeof item === 'object' ? item.name || item.label || JSON.stringify(item) : String(item))).join(', ')
+                                : (v.name || v.label || v.title || JSON.stringify(v));
+                            } else {
+                              clean[k] = String(v).trim();
+                            }
+                          });
+                        }
+                        return clean;
+                      });
+
+                      const previewCols = Object.keys(normalizedRows[0] || {});
+
+                      return (
+                        <div className="overflow-x-auto rounded border border-gray-200">
+                          <table className="min-w-full text-xs">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                {previewCols.map((k) => (
+                                  <th key={k} className="px-2 py-1.5 text-left font-medium text-gray-600 capitalize">
+                                    {k.replace(/([A-Z])/g, ' $1').trim()}
+                                  </th>
                                 ))}
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                        {importPreview.totalRows > 5 && (
-                          <p className="px-2 py-1.5 text-xs text-gray-400 bg-gray-50 border-t border-gray-100">
-                            Showing first 5 of {importPreview.totalRows} rows
-                          </p>
-                        )}
-                      </div>
-                    )}
+                            </thead>
+                            <tbody>
+                              {normalizedRows.map((row, i) => (
+                                <tr key={i} className="border-t border-gray-100">
+                                  {previewCols.map((k) => (
+                                    <td key={k} className="px-2 py-1.5 text-gray-700 max-w-[150px] truncate" title={row[k] || ''}>
+                                      {row[k] || '—'}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {importPreview.totalRows > 5 && (
+                            <p className="px-2 py-1.5 text-xs text-gray-400 bg-gray-50 border-t border-gray-100">
+                              Showing first 5 of {importPreview.totalRows} rows
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input type="checkbox" checked={skipDuplicates} onChange={(e) => setSkipDuplicates(e.target.checked)} className="rounded" />

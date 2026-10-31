@@ -30,23 +30,54 @@ import notifications from './routes/notifications.js';
 
 const app = express();
 
-app.use(helmet());
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  })
+);
 
-// Allow requests from the deployed CRM frontend domains
+// Allow requests from the deployed CRM frontend domains and local environments
 export const allowedOrigins = [
   'https://crm.eco-friendly.tech',
   'https://crm-front-5hmj.onrender.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5000',
   ...(process.env.CLIENT_URL || '')
     .split(',')
     .map((url) => url.trim())
     .filter(Boolean),
 ];
 
+export const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (process.env.NODE_ENV !== 'production') return true;
+  const clean = String(origin).trim().replace(/\/+$/, '').toLowerCase();
+  if (allowedOrigins.some((o) => o.replace(/\/+$/, '').toLowerCase() === clean)) return true;
+  // Allow localhost or 127.0.0.1 on any port or protocol
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(clean)) return true;
+  // Allow eco-friendly.tech and all subdomains (http & https, any port)
+  if (/^https?:\/\/([a-z0-9-]+\.)*eco-friendly\.tech(:\d+)?$/i.test(clean)) return true;
+  // Allow onrender.com subdomains
+  if (/^https?:\/\/([a-z0-9-]+\.)*onrender\.com(:\d+)?$/i.test(clean)) return true;
+  // Allow vercel.app subdomains
+  if (/^https?:\/\/([a-z0-9-]+\.)*vercel\.app(:\d+)?$/i.test(clean)) return true;
+  // Allow private network IP addresses for local testing across devices
+  if (/^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/i.test(clean)) return true;
+  // Allow mobile app webview origins
+  if (/^(capacitor|ionic|file):\/\//i.test(clean)) return true;
+  return false;
+};
+
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests without an Origin header and approved frontend domains
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (isOriginAllowed(origin)) {
         return callback(null, true);
       }
 

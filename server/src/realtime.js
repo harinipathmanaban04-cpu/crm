@@ -6,7 +6,8 @@ const idOf = (v) => v && (v._id || v);
 const roomsFor = (u) => [`user:${u._id}`, `role:${u.role}`, ...(u.role === 'admin' && u.team ? [`team:${u.team}`] : [])];
 
 export function initSocket(server, origin) {
-  io = new Server(server, { cors: { origin, credentials: true } });
+  const corsOrigin = typeof origin === 'function' ? (reqOrigin, cb) => cb(null, origin(reqOrigin)) : origin;
+  io = new Server(server, { cors: { origin: corsOrigin, credentials: true } });
   // Authenticated sockets only; rooms are decided by the server from the DB, never by client-supplied IDs.
   io.use(async (socket, next) => {
     try {
